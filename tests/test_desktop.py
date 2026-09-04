@@ -249,3 +249,63 @@ def test_native_accessibility_action_selects_requested_uia_pattern(monkeypatch):
     native_boundary.accessibility_action("toggle-1", AccessibilityAction.EXPAND)
 
     assert pattern.called == "expand"
+
+
+def test_native_clipboard_keeps_large_hglobal_pointer_sized(monkeypatch):
+    import ctypes
+
+    large_handle = 0x182D8C80008
+    calls = []
+
+    class Function:
+        def __init__(self, name, result):
+            self.name = name
+            self.result = result
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            if (
+                self.name in {"GlobalLock", "GlobalUnlock", "GlobalFree", "SetClipboardData"}
+                and any(argument == large_handle for argument in args)
+                and self.argtypes is None
+            ):
+                raise ctypes.ArgumentError(OverflowError("int too long to convert"))
+            calls.append((self.name, args))
+            return self.result
+
+    class Kernel32:
+        GlobalAlloc = Function("GlobalAlloc", large_handle)
+        GlobalLock = Function("GlobalLock", large_handle)
+        GlobalUnlock = Function("GlobalUnlock", True)
+        GlobalFree = Function("GlobalFree", None)
+
+    class User32:
+        OpenClipboard = Function("OpenClipboard", True)
+        EmptyClipboard = Function("EmptyClipboard", True)
+        SetClipboardData = Function("SetClipboardData", large_handle)
+        CloseClipboard = Function("CloseClipboard", True)
+
+    class Windll:
+        kernel32 = Kernel32()
+        user32 = User32()
+
+    monkeypatch.setattr(ctypes, "windll", Windll())
+    monkeypatch.setattr(ctypes, "memmove", lambda *args: calls.append(("memmove", args)))
+
+    _WindowsNative._set_clipboard_text("hello")
+
+    assert [call[0] for call in calls] == [
+        "OpenClipboard",
+        "EmptyClipboard",
+        "GlobalAlloc",
+        "GlobalLock",
+        "memmove",
+        "GlobalUnlock",
+        "SetClipboardData",
+        "CloseClipboard",
+    ]
+    assert Windll.kernel32.GlobalLock.argtypes == (ctypes.c_void_p,)
+    assert Windll.kernel32.GlobalUnlock.argtypes == (ctypes.c_void_p,)
+    assert Windll.kernel32.GlobalFree.argtypes == (ctypes.c_void_p,)
+    assert Windll.user32.SetClipboardData.argtypes == (ctypes.c_uint, ctypes.c_void_p)

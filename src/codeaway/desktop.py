@@ -452,12 +452,27 @@ class _WindowsNative:
     @staticmethod
     def _set_clipboard_text(text: str) -> None:
         import ctypes
+        from ctypes import wintypes
 
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
-        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        hglobal = ctypes.c_void_p
+        user32.OpenClipboard.argtypes = (wintypes.HWND,)
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.EmptyClipboard.argtypes = ()
+        user32.EmptyClipboard.restype = wintypes.BOOL
+        user32.SetClipboardData.argtypes = (wintypes.UINT, hglobal)
+        user32.SetClipboardData.restype = hglobal
+        user32.CloseClipboard.argtypes = ()
+        user32.CloseClipboard.restype = wintypes.BOOL
+        kernel32.GlobalAlloc.argtypes = (wintypes.UINT, ctypes.c_size_t)
+        kernel32.GlobalAlloc.restype = hglobal
+        kernel32.GlobalLock.argtypes = (hglobal,)
         kernel32.GlobalLock.restype = ctypes.c_void_p
-        user32.SetClipboardData.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = (hglobal,)
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+        kernel32.GlobalFree.argtypes = (hglobal,)
+        kernel32.GlobalFree.restype = hglobal
         if not user32.OpenClipboard(None):
             raise OSError("could not open the clipboard")
         try:
