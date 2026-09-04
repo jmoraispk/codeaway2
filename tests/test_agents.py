@@ -90,7 +90,7 @@ def navigator_nodes():
         ),
         AccessibilityNode(
             "connected",
-            "Image",
+            "ImageControl",
             "Connected",
             "",
             PixelRegion(372, 50, 16, 30),
@@ -335,6 +335,90 @@ def test_codex_inspect_never_captures_or_assumes_idle_when_not_foreground(
         TaskSnapshot("Running task", "busy", worktree=False, selected=False),
     )
     assert desktop.capture_regions == []
+
+
+def test_project_identity_uses_only_the_sibling_label_on_its_row(codex_window):
+    nodes = (
+        AccessibilityNode(
+            "alpha-project",
+            "ButtonControl",
+            "Alpha Research private_1",
+            "group/folder-row sidebar-item",
+            PixelRegion(100, 50, 300, 30),
+            expanded=True,
+        ),
+        AccessibilityNode(
+            "alpha-actions",
+            "ButtonControl",
+            "Project actions for Alpha",
+            "",
+            PixelRegion(350, 50, 30, 30),
+        ),
+        AccessibilityNode(
+            "alpha-decoy",
+            "ButtonControl",
+            "Project actions for Alpha Research",
+            "",
+            PixelRegion(800, 50, 30, 30),
+        ),
+        AccessibilityNode(
+            "research-project",
+            "ButtonControl",
+            "Alpha Research private_2",
+            "group/folder-row sidebar-item",
+            PixelRegion(100, 150, 300, 30),
+            expanded=True,
+        ),
+        AccessibilityNode(
+            "research-actions",
+            "ButtonControl",
+            "Project actions for Alpha Research",
+            "",
+            PixelRegion(350, 150, 30, 30),
+        ),
+    )
+    desktop = NavigatorDesktop(
+        nodes,
+        Image.new("RGB", (300, 140), "#101010"),
+        foreground=False,
+    )
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert [(project.name, project.host) for project in snapshot.projects] == [
+        ("Alpha", "Research private_1"),
+        ("Alpha Research", "private_2"),
+    ]
+
+
+def test_task_markers_ignore_same_y_icons_outside_the_task_row(
+    codex_window, navigator_nodes
+):
+    nodes = tuple(node for node in navigator_nodes if node.id != "running-marker") + (
+        AccessibilityNode(
+            "conversation-icon",
+            "ImageControl",
+            "",
+            (
+                "icon-xs shrink-0 "
+                "icon-2xs text-codex-description no-drag shrink-0"
+            ),
+            PixelRegion(800, 128, 12, 12),
+        ),
+    )
+    desktop = NavigatorDesktop(
+        nodes,
+        Image.new("RGB", (300, 140), "#101010"),
+        foreground=False,
+    )
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert snapshot.projects[0].tasks[1] == TaskSnapshot(
+        "Running task", "unknown", worktree=False, selected=False
+    )
 
 
 @pytest.mark.parametrize("action_name", ["navigate", "click", "scroll", "send"])

@@ -184,11 +184,26 @@ class CodexAgent:
             and second.region.y < first.region.y + first.region.height
         )
 
+    @staticmethod
+    def _overlaps_horizontally(
+        first: AccessibilityNode, second: AccessibilityNode
+    ) -> bool:
+        return (
+            first.region.x < second.region.x + second.region.width
+            and second.region.x < first.region.x + first.region.width
+        )
+
     def _project_identity(
         self, project: AccessibilityNode, nodes: list[AccessibilityNode]
     ) -> tuple[str, str | None]:
         names: list[str] = []
         for node in nodes:
+            if node.role.casefold() not in {"button", "buttoncontrol"}:
+                continue
+            if not self._same_row(project, node) or not self._overlaps_horizontally(
+                project, node
+            ):
+                continue
             for prefix in ("Start new chat in ", "Project actions for "):
                 if node.name.startswith(prefix):
                     names.append(node.name[len(prefix) :])
@@ -236,7 +251,10 @@ class CodexAgent:
         class_name: str,
     ) -> bool:
         return any(
-            class_name in node.class_name and self._same_row(task, node) for node in nodes
+            class_name in node.class_name
+            and self._same_row(task, node)
+            and self._overlaps_horizontally(task, node)
+            for node in nodes
         )
 
     @staticmethod
@@ -293,7 +311,7 @@ class CodexAgent:
                     )
                 )
             connected = any(
-                node.role.casefold() == "image"
+                node.role.casefold() in {"image", "imagecontrol"}
                 and node.name == "Connected"
                 and self._same_row(row.node, node)
                 for node in nodes
