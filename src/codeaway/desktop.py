@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
+import math
+from numbers import Real
 from typing import Protocol
 
 from PIL import Image
@@ -29,6 +31,21 @@ class FractionalRegion:
     y: float
     width: float
     height: float
+
+    def __post_init__(self) -> None:
+        values = (self.x, self.y, self.width, self.height)
+        if any(isinstance(value, bool) or not isinstance(value, Real) for value in values):
+            raise TypeError("fractional region values must be numbers")
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("fractional region values must be finite")
+        if not 0 <= self.x <= 1 or not 0 <= self.y <= 1:
+            raise ValueError("fractional region origin must be between 0 and 1")
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("fractional region dimensions must be positive")
+        if self.width > 1 or self.height > 1:
+            raise ValueError("fractional region dimensions must be at most 1")
+        if self.x + self.width > 1 or self.y + self.height > 1:
+            raise ValueError("fractional region must fit inside its parent")
 
     def resolve(self, parent: PixelRegion) -> PixelRegion:
         return PixelRegion(
