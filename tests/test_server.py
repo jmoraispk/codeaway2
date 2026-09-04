@@ -367,6 +367,20 @@ def test_setup_resource_contains_the_capture_editor_and_assets(app):
     assert "/style.css" in page
 
 
+def test_phone_resource_contains_the_workspace_in_document_order(app):
+    response = app.dispatch("GET", "/", {}, b"")
+
+    assert response.status == 200
+    page = response.body.decode("utf-8")
+    status = page.index('id="phone-status"')
+    navigator = page.index('id="navigator"')
+    conversation = page.index('id="conversation"')
+    composer = page.index('id="composer"')
+    assert status < navigator < conversation < composer
+    assert "/app.js" in page
+    assert "/style.css" in page
+
+
 @pytest.mark.parametrize("path", ["/api/screenshot/composer", "/api/screenshot/nope"])
 def test_screenshot_rejects_unapproved_surface_names(app, path):
     assert app.dispatch("GET", path, {}, b"").status == 404

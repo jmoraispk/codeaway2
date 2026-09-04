@@ -8,6 +8,23 @@ function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function pointToFraction(clientX, clientY, box) {
+  return {
+    x: clamp((clientX - box.left) / box.width, 0, 1),
+    y: clamp((clientY - box.top) / box.height, 0, 1),
+  };
+}
+
+function swipeToSteps(deltaY) {
+  if (Math.abs(deltaY) <= 8) return 0;
+  const steps = clamp(Math.round(deltaY / 24), -12, 12);
+  return steps || Math.sign(deltaY);
+}
+
+function toggleProject(expanded, project) {
+  return { ...expanded, [project]: !expanded[project] };
+}
+
 function normalizeRectangle(start, end, width, height) {
   const startX = clamp(start.x / width, 0, 1);
   const startY = clamp(start.y / height, 0, 1);
@@ -70,18 +87,302 @@ function createSetupModel(surfaces, status) {
   return model;
 }
 
+function initializePhoneWorkspace() {
+  const elements = {
+    composer: document.querySelector("#composer"),
+    composerInput: document.querySelector("#composer-input"),
+    composerMessage: document.querySelector("#composer-message"),
+    composerSend: document.querySelector("#composer-send"),
+    conversationImage: document.querySelector("#conversation-image"),
+    conversationMessage: document.querySelector("#conversation-message"),
+    navigatorProjects: document.querySelector("#navigator-projects"),
+    statusMessage: document.querySelector("#status-message"),
+  };
+  const state = {
+    actionBusy: false,
+    expanded: {},
+    gesture: null,
+    imageRevision: null,
+    navigator: null,
+    pollTimer: null,
+    refreshing: null,
+    revision: null,
+  };
+
+  function showMessage(element, message, error = false) {
+    element.textContent = message;
+    element.classList.toggle("error", error);
+  }
+
+  async function request(path, options = {}) {
+    const response = await fetch(path, options);
+    if (!response.ok) {
+      let message = `Request failed (${response.status}).`;
+      try { message = (await response.json()).error.message; } catch (_) { /* use status */ }
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  function actionRequest(value) {
+    return {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(value),
+    };
+  }
+
+  function svgIcon(className, path) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", className);
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("aria-hidden", "true");
+    const shape = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    shape.setAttribute("d", path);
+    shape.setAttribute("fill", "none");
+    shape.setAttribute("stroke", "currentColor");
+    shape.setAttribute("stroke-width", "2");
+    shape.setAttribute("stroke-linecap", "round");
+    shape.setAttribute("stroke-linejoin", "round");
+    svg.append(shape);
+    return svg;
+  }
+
+  function renderStatus(status) {
+    if (status.ready) {
+      const target = status.target?.title || "agent";
+      showMessage(elements.statusMessage, `Connected to ${target}.`);
+      return;
+    }
+    showMessage(elements.statusMessage, "Setup is required before controls are available.", true);
+  }
+
+  function renderNavigator(snapshot) {
+    elements.navigatorProjects.replaceChildren();
+    if (!snapshot.available) {
+      elements.navigatorProjects.textContent = snapshot.error || "The navigator is unavailable.";
+      return;
+    }
+    for (const project of snapshot.projects) {
+      if (!(project.name in state.expanded)) state.expanded[project.name] = project.expanded;
+      const expanded = state.expanded[project.name];
+      const projectItem = document.createElement("section");
+      projectItem.className = "project";
+
+      const toggle = document.createElement("button");
+      toggle.className = "project-toggle";
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", String(expanded));
+      const chevron = svgIcon("project-chevron", "m8 9 4 4 4-4");
+      chevron.classList.toggle("expanded", expanded);
+      const name = document.createElement("span");
+      name.className = "project-name";
+      name.textContent = project.name;
+      const projectState = document.createElement("span");
+      projectState.className = "project-state";
+      projectState.textContent = project.state;
+      toggle.append(chevron, name, projectState);
+      toggle.addEventListener("click", () => {
+        state.expanded = toggleProject(state.expanded, project.name);
+        renderNavigator(state.navigator);
+      });
+      projectItem.append(toggle);
+
+      const tasks = document.createElement("div");
+      tasks.className = "task-list";
+      tasks.hidden = !expanded;
+      for (const task of project.tasks) {
+        const taskButton = document.createElement("button");
+        taskButton.className = "task";
+        taskButton.type = "button";
+        taskButton.classList.toggle("selected", task.selected);
+        if (task.worktree) {
+          taskButton.append(svgIcon("worktree-marker", "M7 4v9a3 3 0 0 0 3 3h1m-1-12 4 4m-4-4-4 4m8 8 4 4m-4-4-4 4"));
+        }
+        const title = document.createElement("span");
+        title.textContent = task.title;
+        const taskState = document.createElement("span");
+        taskState.className = "task-state";
+        taskState.textContent = task.state;
+        taskButton.append(title, taskState);
+        taskButton.addEventListener("click", async () => {
+          if (state.actionBusy) return;
+          try {
+            await performAction({ kind: "navigate", target: "task", project: project.name, title: task.title });
+            showMessage(elements.conversationMessage, "");
+          } catch (error) {
+            showMessage(elements.conversationMessage, error.message, true);
+          }
+        });
+        tasks.append(taskButton);
+      }
+      projectItem.append(tasks);
+      elements.navigatorProjects.append(projectItem);
+    }
+  }
+
+  function replaceConversation(revision) {
+    if (revision === state.imageRevision) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const image = elements.conversationImage;
+      const cleanup = () => {
+        image.removeEventListener("load", loaded);
+        image.removeEventListener("error", failed);
+      };
+      const loaded = () => {
+        cleanup();
+        state.imageRevision = revision;
+        resolve();
+      };
+      const failed = () => {
+        cleanup();
+        reject(new Error("The conversation image could not be refreshed."));
+      };
+      image.addEventListener("load", loaded, { once: true });
+      image.addEventListener("error", failed, { once: true });
+      image.src = `/api/screenshot/conversation?revision=${encodeURIComponent(revision)}`;
+    });
+  }
+
+  async function performAction(value) {
+    if (state.actionBusy) return;
+    state.actionBusy = true;
+    try {
+      const result = await request("/api/action", actionRequest(value));
+      state.revision = result.revision;
+      await replaceConversation(result.revision);
+      return result;
+    } finally {
+      state.actionBusy = false;
+    }
+  }
+
+  async function refreshWorkspace() {
+    if (state.refreshing) return state.refreshing;
+    state.refreshing = (async () => {
+      const [statusResult, navigatorResult] = await Promise.allSettled([
+        request("/api/status"),
+        request("/api/navigator"),
+      ]);
+      if (statusResult.status === "fulfilled") {
+        const status = statusResult.value;
+        if (state.revision === null || status.revision >= state.revision) {
+          state.revision = status.revision;
+          renderStatus(status);
+          try {
+            await replaceConversation(status.revision);
+          } catch (error) {
+            showMessage(elements.conversationMessage, error.message, true);
+          }
+        }
+      } else {
+        showMessage(elements.statusMessage, statusResult.reason.message, true);
+      }
+      if (navigatorResult.status === "fulfilled") {
+        state.navigator = navigatorResult.value;
+        renderNavigator(state.navigator);
+      } else {
+        elements.navigatorProjects.textContent = navigatorResult.reason.message;
+      }
+    })();
+    try {
+      await state.refreshing;
+    } finally {
+      state.refreshing = null;
+    }
+  }
+
+  function startPolling() {
+    if (state.pollTimer !== null) return;
+    refreshWorkspace();
+    state.pollTimer = window.setInterval(refreshWorkspace, 2000);
+  }
+
+  function stopPolling() {
+    if (state.pollTimer === null) return;
+    window.clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+
+  elements.conversationImage.addEventListener("pointerdown", (event) => {
+    if (state.actionBusy || !elements.conversationImage.complete) return;
+    event.preventDefault();
+    state.gesture = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    elements.conversationImage.setPointerCapture(event.pointerId);
+  });
+  elements.conversationImage.addEventListener("pointerup", async (event) => {
+    const gesture = state.gesture;
+    if (!gesture || gesture.id !== event.pointerId || state.actionBusy) return;
+    state.gesture = null;
+    const deltaY = event.clientY - gesture.y;
+    const distance = Math.hypot(event.clientX - gesture.x, deltaY);
+    let action = null;
+    if (distance < 8) {
+      const point = pointToFraction(event.clientX, event.clientY, elements.conversationImage.getBoundingClientRect());
+      action = { kind: "click", surface: "conversation", ...point };
+    } else if (Math.abs(deltaY) >= 8) {
+      const amount = swipeToSteps(deltaY);
+      if (amount) action = { kind: "scroll", amount };
+    }
+    if (!action) return;
+    try {
+      await performAction(action);
+      showMessage(elements.conversationMessage, "");
+    } catch (error) {
+      showMessage(elements.conversationMessage, error.message, true);
+    }
+  });
+  elements.conversationImage.addEventListener("pointercancel", () => {
+    state.gesture = null;
+  });
+  elements.composer.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = elements.composerInput.value;
+    if (!text.trim() || state.actionBusy) return;
+    elements.composerSend.disabled = true;
+    try {
+      await performAction({ kind: "send", text });
+      elements.composerInput.value = "";
+      showMessage(elements.composerMessage, "");
+    } catch (error) {
+      showMessage(elements.composerMessage, error.message, true);
+    } finally {
+      elements.composerSend.disabled = false;
+    }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      startPolling();
+      refreshWorkspace();
+    } else {
+      stopPolling();
+    }
+  });
+
+  if (document.visibilityState === "visible") startPolling();
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     calibrationRequest,
     createSetupModel,
     normalizeRectangle,
     phoneUrlForStatus,
+    pointToFraction,
     setupDiagramLabels,
+    swipeToSteps,
+    toggleProject,
   };
 }
 
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", () => {
+    if (document.querySelector("#phone-workspace")) {
+      initializePhoneWorkspace();
+      return;
+    }
     const elements = {
       complete: document.querySelector("#setup-complete"),
       dragHelp: document.querySelector("#drag-help"),

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CodeAway</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <main id="phone-workspace" class="phone-workspace">
+      <header id="phone-status" class="phone-status">
+        <div>
+          <p class="eyebrow">CodeAway</p>
+          <p id="status-message" class="status-message" role="status">Connecting…</p>
+        </div>
+        <a href="/setup">Setup</a>
+      </header>
+
+      <section id="navigator" class="navigator" aria-labelledby="navigator-title">
+        <h1 id="navigator-title">Navigator</h1>
+        <div id="navigator-projects" class="navigator-projects" aria-live="polite"></div>
+      </section>
+
+      <section id="conversation" class="conversation" aria-labelledby="conversation-title">
+        <h2 id="conversation-title">Conversation</h2>
+        <p id="conversation-message" class="message" role="status"></p>
+        <img id="conversation-image" alt="Current agent conversation">
+      </section>
+
+      <form id="composer" class="composer" aria-labelledby="composer-title">
+        <label id="composer-title" for="composer-input">Message</label>
+        <div class="composer-controls">
+          <textarea id="composer-input" rows="3" placeholder="Send a message to the agent"></textarea>
+          <button id="composer-send" type="submit">Send</button>
+        </div>
+        <p id="composer-message" class="message" role="status"></p>
+      </form>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

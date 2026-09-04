@@ -5,7 +5,10 @@ const {
   createSetupModel,
   normalizeRectangle,
   phoneUrlForStatus,
+  pointToFraction,
   setupDiagramLabels,
+  swipeToSteps,
+  toggleProject,
 } = require("../src/codeaway/web/app.js");
 
 test("setup diagram names every required capture", () => {
@@ -60,4 +63,22 @@ test("setup brackets an IPv6 status address in the phone URL", () => {
     phoneUrlForStatus({ bind_ip: "fd7a:115c:a1e0::7", port: 8765 }),
     "http://[fd7a:115c:a1e0::7]:8765/",
   );
+});
+
+test("conversation tap maps to image fractions", () => {
+  assert.deepEqual(pointToFraction(150, 100, { left: 50, top: 50, width: 200, height: 100 }), {
+    x: 0.5,
+    y: 0.5,
+  });
+});
+
+test("swipe distance maps proportionally to bounded logical steps", () => {
+  assert.equal(swipeToSteps(240), 10);
+  assert.equal(swipeToSteps(-240), -10);
+  assert.equal(swipeToSteps(2000), 12);
+});
+
+test("project expansion is local UI state", () => {
+  const next = toggleProject({ SummonLab: true }, "SummonLab");
+  assert.deepEqual(next, { SummonLab: false });
 });
