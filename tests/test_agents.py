@@ -19,7 +19,7 @@ class FakeAgent:
     id: str = "fake"
 
     def matches(self, window):
-        return window.process_path == "fake.exe"
+        return window.process_path.casefold().endswith("fake.exe")
 
     def default_surfaces(self, window):
         del window
@@ -28,6 +28,12 @@ class FakeAgent:
             FractionalRegion(0.2, 0.0, 0.6, 1.0),
             FractionalRegion(0.2, 0.9, 0.6, 0.1),
         )
+
+
+@dataclass
+class SelectiveFakeAgent(FakeAgent):
+    def matches(self, window):
+        return super().matches(window) and window.title == "Accepted"
 
 
 def test_registry_discovers_matching_agent():
@@ -64,3 +70,23 @@ def test_registry_resolve_prefers_exact_title_and_saved_surfaces():
     )
 
     assert result == AgentTarget("fake", exact_window, saved)
+
+
+def test_registry_resolve_rejects_same_process_window_not_matching_agent():
+    rejected_window = DesktopWindow(
+        "rejected", 1, "Rejected", "C:/Apps/Fake.exe", PixelRegion(0, 0, 1000, 800)
+    )
+    accepted_window = DesktopWindow(
+        "accepted", 2, "Accepted", "C:/Apps/Fake.exe", PixelRegion(0, 0, 1000, 800)
+    )
+    desktop = FakeDesktop([rejected_window, accepted_window])
+    registry = AgentRegistry([SelectiveFakeAgent()])
+    saved = SurfaceMap(
+        FractionalRegion(0.0, 0.0, 0.1, 1.0),
+        FractionalRegion(0.1, 0.0, 0.8, 0.8),
+        FractionalRegion(0.1, 0.8, 0.8, 0.2),
+    )
+
+    result = registry.resolve(desktop, "fake", "c:/apps/fake.exe", None, saved)
+
+    assert result == AgentTarget("fake", accepted_window, saved)

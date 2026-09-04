@@ -104,12 +104,15 @@ class AgentRegistry:
         title_hint: str | None,
         surfaces: SurfaceMap,
     ) -> AgentTarget | None:
+        agent = next((agent for agent in self._agents if agent.id == agent_id), None)
+        if agent is None:
+            return None
         windows = desktop.list_windows()
         candidates = [
             window
             for window in windows
             if os.path.normcase(window.process_path) == os.path.normcase(process_path)
-            and any(agent.id == agent_id for agent in self._agents)
+            and agent.matches(window)
         ]
         if not candidates:
             return None
