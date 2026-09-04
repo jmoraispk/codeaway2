@@ -355,6 +355,18 @@ def test_fixed_asset_map_rejects_traversal(app):
     assert app.dispatch("GET", "/../../README.md", {}, b"").status == 404
 
 
+def test_setup_resource_contains_the_capture_editor_and_assets(app):
+    response = app.dispatch("GET", "/setup", {}, b"")
+
+    assert response.status == 200
+    page = response.body.decode("utf-8")
+    assert 'data-region="sidebar"' in page
+    assert 'data-region="conversation"' in page
+    assert 'data-region="composer"' in page
+    assert "/app.js" in page
+    assert "/style.css" in page
+
+
 @pytest.mark.parametrize("path", ["/api/screenshot/composer", "/api/screenshot/nope"])
 def test_screenshot_rejects_unapproved_surface_names(app, path):
     assert app.dispatch("GET", path, {}, b"").status == 404

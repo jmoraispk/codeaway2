@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CodeAway setup</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <p class="eyebrow">CodeAway</p>
+        <h1>Set up your capture areas</h1>
+        <p>Choose the local agent window, then draw the three areas CodeAway can safely use.</p>
+      </header>
+
+      <figure class="capture-guide" aria-labelledby="capture-guide-title">
+        <figcaption id="capture-guide-title">Capture these three areas</figcaption>
+        <div class="agent-window-diagram">
+          <div data-region="sidebar">Sidebar<br><small>projects and tasks</small></div>
+          <div data-region="conversation">Conversation<br><small>right pane above the input</small></div>
+          <div data-region="composer">Composer<br><small>chat box only; it may grow taller</small></div>
+        </div>
+        <p>Do not include the full-width toolbar or status row in Composer.</p>
+      </figure>
+
+      <section class="setup-editor" aria-labelledby="editor-title">
+        <h2 id="editor-title">Calibrate the agent window</h2>
+        <p id="setup-message" class="message" role="status">Looking for compatible windows…</p>
+
+        <label for="window-select">Compatible window</label>
+        <div class="window-choice">
+          <select id="window-select" disabled></select>
+          <button id="load-window" type="button" disabled>Load window</button>
+        </div>
+
+        <fieldset id="region-choice" disabled>
+          <legend>Area to draw</legend>
+          <label><input type="radio" name="region" value="sidebar" checked> Sidebar</label>
+          <label><input type="radio" name="region" value="conversation"> Conversation</label>
+          <label><input type="radio" name="region" value="composer"> Composer</label>
+        </fieldset>
+
+        <div id="screenshot-stage" class="screenshot-stage" hidden role="group" aria-label="Window screenshot calibration editor">
+          <img id="window-screenshot" alt="Selected agent window screenshot">
+          <div id="region-overlays" class="region-overlays" aria-hidden="true"></div>
+        </div>
+        <p id="drag-help" class="help" hidden>Drag over the selected area. Areas smaller than 1% of the image are not saved.</p>
+
+        <button id="save-calibration" type="button" disabled>Save calibration</button>
+        <p id="setup-complete" class="complete" hidden></p>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
