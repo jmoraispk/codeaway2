@@ -1,7 +1,27 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from codeaway.agents import AgentRegistry, AgentTarget, SurfaceMap
-from codeaway.desktop import DesktopWindow, FractionalRegion, PixelRegion
+import pytest
+from PIL import Image
+
+from codeaway.agents import (
+    AgentRegistry,
+    AgentTarget,
+    ClickAction,
+    CodexAgent,
+    NavigationAction,
+    ProjectSnapshot,
+    SurfaceMap,
+    TaskSnapshot,
+    TargetUnavailable,
+)
+from codeaway.desktop import (
+    AccessibilityAction,
+    AccessibilityNode,
+    DesktopWindow,
+    FractionalRegion,
+    PixelPoint,
+    PixelRegion,
+)
 
 
 @dataclass
@@ -34,6 +54,159 @@ class FakeAgent:
 class SelectiveFakeAgent(FakeAgent):
     def matches(self, window):
         return super().matches(window) and window.title == "Accepted"
+
+
+@pytest.fixture
+def codex_window():
+    return DesktopWindow(
+        "codex-window",
+        41,
+        "ChatGPT",
+        r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3\Codex.exe",
+        PixelRegion(100, 50, 1000, 700),
+    )
+
+
+@pytest.fixture
+def navigator_nodes():
+    return (
+        AccessibilityNode(
+            "project",
+            "Button",
+            "SummonLab private_3",
+            "group/folder-row sidebar-item",
+            PixelRegion(100, 50, 300, 30),
+            expanded=True,
+            actions=frozenset(
+                {AccessibilityAction.EXPAND, AccessibilityAction.COLLAPSE}
+            ),
+        ),
+        AccessibilityNode(
+            "new-chat",
+            "Button",
+            "Start new chat in SummonLab",
+            "",
+            PixelRegion(340, 50, 30, 30),
+        ),
+        AccessibilityNode(
+            "connected",
+            "Image",
+            "Connected",
+            "",
+            PixelRegion(372, 50, 16, 30),
+        ),
+        AccessibilityNode(
+            "finished",
+            "Button",
+            "Finished task",
+            "sidebar-item py-row-y bg-primary-ghost-hover",
+            PixelRegion(100, 90, 300, 28),
+            actions=frozenset({AccessibilityAction.INVOKE}),
+        ),
+        AccessibilityNode(
+            "worktree",
+            "Image",
+            "",
+            "icon-2xs text-codex-description no-drag shrink-0",
+            PixelRegion(110, 96, 12, 12),
+        ),
+        AccessibilityNode(
+            "pin",
+            "Button",
+            "Pin chat",
+            "sidebar-item py-row-y",
+            PixelRegion(350, 90, 20, 28),
+        ),
+        AccessibilityNode(
+            "running",
+            "Button",
+            "Running task",
+            "sidebar-item py-row-y",
+            PixelRegion(100, 122, 300, 28),
+            actions=frozenset({AccessibilityAction.INVOKE}),
+        ),
+        AccessibilityNode(
+            "running-marker",
+            "Image",
+            "",
+            "icon-xs shrink-0",
+            PixelRegion(375, 128, 12, 12),
+        ),
+        AccessibilityNode(
+            "archive",
+            "Button",
+            "Archive chat",
+            "sidebar-item py-row-y",
+            PixelRegion(350, 122, 20, 28),
+        ),
+    )
+
+
+@dataclass
+class NavigatorDesktop:
+    nodes: tuple[AccessibilityNode, ...]
+    sidebar: Image.Image
+    foreground: bool = True
+    capture_regions: list[PixelRegion] = field(default_factory=list)
+
+    def accessibility_tree(self, window):
+        del window
+        return list(reversed(self.nodes))
+
+    def is_foreground(self, window):
+        del window
+        return self.foreground
+
+    def capture(self, region):
+        self.capture_regions.append(region)
+        return self.sidebar
+
+
+@dataclass
+class ActionDesktop:
+    nodes: tuple[AccessibilityNode, ...]
+    activate_result: bool = True
+    calls: list[tuple[object, ...]] = field(default_factory=list)
+    last_click: PixelPoint | None = None
+
+    def activate(self, window):
+        self.calls.append(("activate", window))
+        return self.activate_result
+
+    def accessibility_tree(self, window):
+        self.calls.append(("accessibility_tree", window))
+        return list(reversed(self.nodes))
+
+    def accessibility_action(self, node, action):
+        self.calls.append(("accessibility_action", node, action))
+
+    def click(self, point):
+        self.last_click = point
+        self.calls.append(("click", point))
+
+    def scroll(self, point, amount):
+        self.calls.append(("scroll", point, amount))
+
+    def paste_and_submit(self, point, text):
+        self.calls.append(("paste_and_submit", point, text))
+
+
+@pytest.fixture
+def fake_desktop(navigator_nodes):
+    return ActionDesktop(navigator_nodes)
+
+
+@pytest.fixture
+def codex_target(codex_window):
+    return AgentTarget(
+        "codex",
+        codex_window,
+        SurfaceMap(
+            sidebar=FractionalRegion(0.0, 0.0, 0.3, 1.0),
+            conversation=FractionalRegion(0.3, 0.1, 0.6, 0.65),
+            composer=FractionalRegion(0.32, 0.78, 0.56, 0.18),
+        ),
+    )
 
 
 def test_registry_discovers_matching_agent():
@@ -90,3 +263,195 @@ def test_registry_resolve_rejects_same_process_window_not_matching_agent():
     result = registry.resolve(desktop, "fake", "c:/apps/fake.exe", None, saved)
 
     assert result == AgentTarget("fake", accepted_window, saved)
+
+
+@pytest.mark.parametrize(
+    ("process_path", "title", "expected"),
+    [
+        (
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3\Codex.exe",
+            "ChatGPT",
+            True,
+        ),
+        (r"C:\dev\OpenAI\Codex\Codex.exe", "ChatGPT", True),
+        (r"C:\Program Files\ChatGPT\ChatGPT.exe", "ChatGPT", False),
+        (r"C:\Program Files\Browser\browser.exe", "ChatGPT", False),
+    ],
+)
+def test_codex_matching_requires_a_codex_executable(process_path, title, expected):
+    window = DesktopWindow("window", 1, title, process_path, PixelRegion(0, 0, 800, 600))
+
+    assert CodexAgent().matches(window) is expected
+
+
+def test_codex_default_surfaces_are_editor_starting_suggestions(codex_window):
+    assert CodexAgent().default_surfaces(codex_window) == SurfaceMap(
+        sidebar=FractionalRegion(0.0, 0.0, 0.21, 1.0),
+        conversation=FractionalRegion(0.21, 0.05, 0.79, 0.73),
+        composer=FractionalRegion(0.32, 0.78, 0.56, 0.18),
+    )
+
+
+def test_codex_inspect_builds_sorted_projects_and_tasks_from_generic_inputs(
+    codex_window, navigator_nodes
+):
+    sidebar = Image.new("RGB", (300, 140), "#101010")
+    for x in range(274, 282):
+        for y in range(52, 60):
+            sidebar.putpixel((x, y), (45, 120, 245))
+    desktop = NavigatorDesktop(navigator_nodes, sidebar)
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert snapshot.projects[0] == ProjectSnapshot(
+        name="SummonLab",
+        host="private_3",
+        connected=True,
+        state="connected",
+        expanded=True,
+        tasks=(
+            TaskSnapshot("Finished task", "done", worktree=True, selected=True),
+            TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+        ),
+    )
+    assert desktop.capture_regions == [target.surfaces.sidebar.resolve(codex_window.region)]
+
+
+def test_codex_inspect_never_captures_or_assumes_idle_when_not_foreground(
+    codex_window, navigator_nodes
+):
+    desktop = NavigatorDesktop(
+        navigator_nodes,
+        Image.new("RGB", (300, 140), "#101010"),
+        foreground=False,
+    )
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert snapshot.projects[0].tasks == (
+        TaskSnapshot("Finished task", "unknown", worktree=True, selected=True),
+        TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+    )
+    assert desktop.capture_regions == []
+
+
+@pytest.mark.parametrize("action_name", ["navigate", "click", "scroll", "send"])
+def test_failed_activation_prevents_every_input(
+    action_name, fake_desktop, codex_target
+):
+    fake_desktop.activate_result = False
+    agent = CodexAgent()
+
+    with pytest.raises(TargetUnavailable):
+        if action_name == "navigate":
+            agent.navigate(
+                fake_desktop,
+                codex_target,
+                NavigationAction("task", "SummonLab", title="Finished task"),
+            )
+        elif action_name == "click":
+            agent.click(fake_desktop, codex_target, ClickAction("conversation", 0.5, 0.5))
+        elif action_name == "scroll":
+            agent.scroll(fake_desktop, codex_target, -4)
+        else:
+            agent.send(fake_desktop, codex_target, "hello")
+
+    assert fake_desktop.calls == [("activate", codex_target.window)]
+
+
+@pytest.mark.parametrize(
+    ("current", "requested", "expected"),
+    [
+        (False, True, AccessibilityAction.EXPAND),
+        (True, False, AccessibilityAction.COLLAPSE),
+        (True, True, None),
+        (False, False, None),
+    ],
+)
+def test_project_navigation_changes_only_a_different_expansion_state(
+    current, requested, expected, fake_desktop, codex_target
+):
+    project = next(node for node in fake_desktop.nodes if node.id == "project")
+    fake_desktop.nodes = tuple(
+        AccessibilityNode(
+            node.id,
+            node.role,
+            node.name,
+            node.class_name,
+            node.region,
+            node.depth,
+            current,
+            node.actions,
+        )
+        if node is project
+        else node
+        for node in fake_desktop.nodes
+    )
+
+    CodexAgent().navigate(
+        fake_desktop,
+        codex_target,
+        NavigationAction("project", "SummonLab", expanded=requested),
+    )
+
+    action_calls = [call for call in fake_desktop.calls if call[0] == "accessibility_action"]
+    if expected is None:
+        assert action_calls == []
+    else:
+        assert action_calls == [
+            ("accessibility_action", fake_desktop.nodes[0], expected)
+        ]
+
+
+def test_task_navigation_invokes_the_task_under_the_named_project(
+    fake_desktop, codex_target
+):
+    finished = next(node for node in fake_desktop.nodes if node.id == "finished")
+
+    CodexAgent().navigate(
+        fake_desktop,
+        codex_target,
+        NavigationAction("task", "SummonLab", title="Finished task"),
+    )
+
+    assert fake_desktop.calls[-1] == (
+        "accessibility_action",
+        finished,
+        AccessibilityAction.INVOKE,
+    )
+
+
+def test_sidebar_click_left_offsets_a_blue_dot(fake_desktop, codex_target):
+    CodexAgent().click(
+        fake_desktop, codex_target, ClickAction("sidebar", 0.97, 0.4)
+    )
+
+    assert fake_desktop.last_click == PixelPoint(366, 330)
+
+
+def test_conversation_click_preserves_proportional_coordinates(
+    fake_desktop, codex_target
+):
+    CodexAgent().click(
+        fake_desktop, codex_target, ClickAction("conversation", 0.25, 0.75)
+    )
+
+    assert fake_desktop.last_click == PixelPoint(550, 461)
+
+
+def test_scroll_uses_calibrated_conversation_center(fake_desktop, codex_target):
+    CodexAgent().scroll(fake_desktop, codex_target, -4)
+
+    assert fake_desktop.calls[-1] == ("scroll", PixelPoint(700, 347), -4)
+
+
+def test_send_uses_calibrated_composer_center(fake_desktop, codex_target):
+    CodexAgent().send(fake_desktop, codex_target, "hello")
+
+    assert fake_desktop.calls[-1] == (
+        "paste_and_submit",
+        PixelPoint(700, 659),
+        "hello",
+    )
