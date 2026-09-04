@@ -20,6 +20,10 @@ The first release provides:
   `ChatGPT`.
 - A local setup page that shows a full-window screenshot and lets the user
   select Sidebar, Conversation, and Composer rectangles.
+- Persistent target selection and calibration, so later launches can start
+  without reopening the setup page.
+- A small labeled diagram on the setup page showing exactly which portions of
+  an agent window belong to Sidebar, Conversation, and Composer.
 - A responsive phone workspace with a structured project/task navigator, a
   conversation screenshot, direct clicking, proportional scrolling, and text
   submission.
@@ -109,9 +113,10 @@ class DesktopBackend(Protocol):
 
     def list_windows(self) -> list[DesktopWindow]: ...
     def activate(self, window: DesktopWindow) -> bool: ...
+    def is_foreground(self, window: DesktopWindow) -> bool: ...
     def capture(self, region: PixelRegion) -> Image.Image: ...
     def accessibility_tree(self, window: DesktopWindow) -> list[AccessibilityNode]: ...
-    def invoke(self, node: AccessibilityNode) -> None: ...
+    def accessibility_action(self, node: AccessibilityNode, action: AccessibilityAction) -> None: ...
     def click(self, point: PixelPoint) -> None: ...
     def scroll(self, point: PixelPoint, amount: int) -> None: ...
     def paste_and_submit(self, point: PixelPoint, text: str) -> None: ...
@@ -175,8 +180,11 @@ warning that every device allowed to reach that address and port receives full
 mouse and keyboard control. The MVP relies on the user's network boundary and
 includes no application pairing or authentication.
 
-The service runs in the foreground. It opens `/setup` in the default browser
-unless `--no-browser` is passed, and it stops cleanly on `Ctrl+C`.
+The service runs in the foreground and stops cleanly on `Ctrl+C`. When the
+saved target and all three calibrated surfaces are still valid, startup prints
+the phone workspace URL and does not open a laptop browser. When calibration
+is missing or the saved target cannot be resolved, startup opens `/setup` in
+the default browser unless `--no-browser` is passed.
 
 ## Configuration
 
@@ -205,7 +213,9 @@ The stored fields are:
 
 Surface arrays are `[x, y, width, height]` fractions in the inclusive range
 zero through one. The loader rejects malformed types, non-positive dimensions,
-and rectangles extending outside the window.
+and rectangles extending outside the window. The selected window is resolved
+again at startup from its agent identifier, process path, and title hint; an
+operating-system window handle is never treated as persistent identity.
 
 ## Browser Interfaces
 
@@ -218,6 +228,10 @@ and built wheels.
 - Detected compatible agent windows.
 - Selection of the single active window.
 - A current full-window screenshot.
+- A compact schematic of an agent window with Sidebar on the left,
+  Conversation in the right pane above the input, and Composer tightly around
+  the chat input box. The diagram explains that Composer may grow vertically
+  and must not include the full-width toolbar or status row.
 - A rectangle editor for Sidebar, Conversation, and Composer.
 - Save and recapture actions.
 - The active bind address and phone URL.
@@ -267,7 +281,11 @@ Startup:
 1. `cli.py` loads configuration and resolves the bind address.
 2. `desktop.py` selects `WindowsDesktop` from `sys.platform`.
 3. `agents.py` registers `CodexAgent`.
-4. `server.py` starts and the browser opens `/setup`.
+4. The registry attempts to resolve the saved agent target from stable window
+   hints rather than a stale native handle.
+5. `server.py` starts. If target resolution and calibration both succeed, it
+   prints the workspace URL without opening a laptop browser. Otherwise the
+   browser opens `/setup` unless `--no-browser` was supplied.
 
 Setup:
 
@@ -299,6 +317,9 @@ Action:
 ## Error Handling
 
 - No compatible window: setup remains usable and offers Refresh.
+- Saved target or calibration unavailable at startup: the service remains
+  running and directs the user to setup; it does not discard valid saved
+  rectangles merely because the target is temporarily closed.
 - Selected window disappears: actions return conflict status, discovery runs
   again, and no input is injected.
 - Activation fails: the action returns conflict status and no click, scroll,
@@ -326,11 +347,12 @@ would affect the user's machine.
   accessibility-node conversion. Native input calls are intercepted at the
   final OS boundary.
 - `test_config.py`: defaults, normalization, atomic writes, cached-address
-  precedence, and malformed-file recovery.
+  precedence, persisted surface calibration, and malformed-file recovery.
 - `test_server.py`: real HTTP server requests, body limits, fixed static assets,
   error responses, and action dispatch through both backend contracts.
-- Browser tests: setup rectangle behavior, polling visibility rules, navigator
-  expansion, click mapping, scrolling, and composer submission.
+- Browser tests: capture diagram labels, setup rectangle behavior, persisted
+  calibration startup, polling visibility rules, navigator expansion, click
+  mapping, scrolling, and composer submission.
 - `test_package.py`: wheel contents, embedded assets, console entry point, and
   `python -m codeaway` behavior.
 

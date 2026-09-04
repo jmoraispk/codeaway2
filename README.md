@@ -37,5 +37,11 @@ uvx codeaway --ip 100.x.x.x
 The selected address is cached for later launches. CodeAway falls back to
 `127.0.0.1` with a warning if a cached address is no longer available.
 
+On the first run, a browser setup page shows a labeled capture diagram and lets
+you calibrate Sidebar, Conversation, and Composer over a screenshot of the
+agent window. CodeAway saves that calibration. Later launches reuse it and do
+not reopen the laptop setup page unless the saved target or calibration needs
+attention.
+
 See the [MVP design](docs/superpowers/specs/2026-09-04-codeaway-mvp-design.md)
 for the approved scope and data flow.
