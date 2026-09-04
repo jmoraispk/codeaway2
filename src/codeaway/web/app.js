@@ -21,8 +21,63 @@ function normalizeRectangle(start, end, width, height) {
   };
 }
 
+function surfaceObject([x, y, width, height]) {
+  return { x, y, width, height };
+}
+
+function surfacesFromApi(surfaces) {
+  return Object.fromEntries(
+    regionNames.map((name) => [name, surfaceObject(surfaces[name])]),
+  );
+}
+
+function surfacesForApi(surfaces) {
+  return Object.fromEntries(
+    regionNames.map((name) => {
+      const { x, y, width, height } = surfaces[name];
+      return [name, [x, y, width, height]];
+    }),
+  );
+}
+
+function jsonRequest(method, value) {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  };
+}
+
+function calibrationRequest(surfaces) {
+  return jsonRequest("PUT", { surfaces: surfacesForApi(surfaces) });
+}
+
+function phoneUrlForStatus({ bind_ip, port }) {
+  const host = bind_ip.includes(":") && !bind_ip.startsWith("[")
+    ? `[${bind_ip}]`
+    : bind_ip;
+  return `http://${host}:${port}/`;
+}
+
+function createSetupModel(surfaces, status) {
+  const model = {
+    phoneUrl: phoneUrlForStatus(status),
+    surfaces: surfacesFromApi(surfaces),
+    replace(name, rectangle) {
+      model.surfaces[name] = { ...rectangle };
+    },
+  };
+  return model;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { normalizeRectangle, setupDiagramLabels };
+  module.exports = {
+    calibrationRequest,
+    createSetupModel,
+    normalizeRectangle,
+    phoneUrlForStatus,
+    setupDiagramLabels,
+  };
 }
 
 if (typeof document !== "undefined") {
@@ -39,7 +94,14 @@ if (typeof document !== "undefined") {
       stage: document.querySelector("#screenshot-stage"),
       windowSelect: document.querySelector("#window-select"),
     };
-    const state = { drag: null, selectedWindow: null, surfaces: null };
+    const state = {
+      drag: null,
+      phoneUrl: null,
+      selectedWindow: null,
+      status: null,
+      surfaces: null,
+      windows: [],
+    };
 
     function showMessage(message, error = false) {
       elements.message.textContent = message;
@@ -94,14 +156,6 @@ if (typeof document !== "undefined") {
         : response;
     }
 
-    function jsonRequest(method, value) {
-      return {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(value),
-      };
-    }
-
     async function loadScreenshot(revision) {
       elements.stage.hidden = false;
       elements.dragHelp.hidden = false;
@@ -120,7 +174,7 @@ if (typeof document !== "undefined") {
       try {
         const result = await request("/api/select", jsonRequest("POST", { window_id: windowId }));
         state.selectedWindow = selected;
-        state.surfaces = structuredClone(selected.surfaces);
+        state.surfaces = createSetupModel(selected.surfaces, state.status).surfaces;
         await loadScreenshot(result.revision);
         elements.regionChoice.disabled = false;
         elements.saveCalibration.disabled = false;
@@ -151,6 +205,16 @@ if (typeof document !== "undefined") {
         elements.windowSelect.disabled = false;
         elements.loadWindow.disabled = false;
         await selectWindow();
+      } catch (error) {
+        showMessage(error.message, true);
+      }
+    }
+
+    async function initialize() {
+      try {
+        state.status = await request("/api/status");
+        state.phoneUrl = phoneUrlForStatus(state.status);
+        await loadWindows();
       } catch (error) {
         showMessage(error.message, true);
       }
@@ -193,8 +257,8 @@ if (typeof document !== "undefined") {
       elements.saveCalibration.disabled = true;
       showMessage("Saving calibration…");
       try {
-        await request("/api/calibration", jsonRequest("PUT", { surfaces: state.surfaces }));
-        const phoneUrl = `${window.location.origin}/`;
+        await request("/api/calibration", calibrationRequest(state.surfaces));
+        const phoneUrl = state.phoneUrl;
         elements.complete.replaceChildren(
           "Saved. On your phone, open ",
           phoneUrl,
@@ -213,6 +277,6 @@ if (typeof document !== "undefined") {
       }
     });
 
-    loadWindows();
+    initialize();
   });
 }
