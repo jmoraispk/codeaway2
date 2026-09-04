@@ -480,6 +480,33 @@ def test_navigator_serializes_agent_snapshot(app):
     ]
 
 
+def test_concurrent_same_target_reads_both_succeed(app):
+    readers_ready = threading.Barrier(3)
+    results = [None, None]
+
+    def synchronized_list_windows():
+        readers_ready.wait(2)
+        return list(app.fake_desktop.windows)
+
+    def read_navigator(index):
+        results[index] = app.dispatch("GET", "/api/navigator", {}, b"")
+
+    app.fake_desktop.list_windows = synchronized_list_windows
+    threads = [
+        threading.Thread(target=read_navigator, args=(index,)) for index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        readers_ready.wait(2)
+    finally:
+        for thread in threads:
+            thread.join(2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert [response.status for response in results] == [200, 200]
+
+
 def test_target_resolution_does_not_overwrite_a_concurrent_selection(app):
     entered_resolution = threading.Event()
     release_resolution = threading.Event()

@@ -185,15 +185,26 @@ class Application:
             return None
         return AgentTarget(selected.agent_id, window, selected.surfaces)
 
+    @staticmethod
+    def _selection_token(target: AgentTarget | None) -> tuple[object, ...] | None:
+        if target is None:
+            return None
+        return (
+            target.agent_id,
+            target.window.native_handle,
+            os.path.normcase(target.window.process_path),
+            target.surfaces,
+        )
+
     def _current_target(self) -> AgentTarget | None:
         with self.state.state_lock:
             selected = self.state.target
-            revision = self.state.revision
+            selection_token = self._selection_token(selected)
         if selected is None:
             return None
         current = self._resolve_runtime_target(selected)
         with self.state.state_lock:
-            if self.state.revision != revision or self.state.target is not selected:
+            if self._selection_token(self.state.target) != selection_token:
                 return None
             self.state.target = current
         return current
