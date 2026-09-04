@@ -3,6 +3,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import ThreadingHTTPServer
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
@@ -207,6 +208,31 @@ def test_select_resolves_a_window_even_when_discovery_ids_are_ephemeral(app):
     assert app.state.target.window.id == "window-new-id"
 
 
+def test_select_rejects_replacement_window_with_same_executable(app):
+    windows = payload(app.dispatch("GET", "/api/windows", {}, b""))["windows"]
+    old_id = windows[0]["id"]
+    app.state.target = None
+    app.fake_desktop.windows = [
+        DesktopWindow(
+            "replacement",
+            99,
+            "Different Agent Window",
+            "C:/Apps/agent.exe",
+            PixelRegion(100, 50, 1000, 800),
+        )
+    ]
+
+    response = app.dispatch(
+        "POST",
+        "/api/select",
+        json_headers(),
+        json.dumps({"window_id": old_id}).encode(),
+    )
+
+    assert response.status == 409
+    assert app.state.target is None
+
+
 def test_cross_origin_action_is_rejected(app):
     response = app.dispatch(
         "POST",
@@ -216,6 +242,19 @@ def test_cross_origin_action_is_rejected(app):
             "Origin": "http://evil.example",
             "Content-Type": "application/json",
         },
+        b'{"kind":"scroll","amount":-2}',
+    )
+
+    assert response.status == 403
+    assert payload(response)["error"]["code"] == "origin_mismatch"
+    assert app.fake_agent.calls == []
+
+
+def test_malformed_origin_returns_structured_forbidden_response(app):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(Origin="http://["),
         b'{"kind":"scroll","amount":-2}',
     )
 
@@ -284,6 +323,16 @@ def test_state_changing_route_rejects_malformed_json(app):
     assert payload(response)["error"]["code"] == "invalid_json"
 
 
+def test_json_integer_over_interpreter_limit_returns_structured_bad_request(app):
+    body = b'{"kind":"scroll","amount":' + b"9" * 5000 + b"}"
+
+    response = app.dispatch("POST", "/api/action", json_headers(), body)
+
+    assert response.status == 400
+    assert payload(response)["error"]["code"] == "invalid_json"
+    assert app.fake_agent.calls == []
+
+
 def test_state_changing_route_rejects_body_over_64_kib_before_decoding(app):
     response = app.dispatch(
         "POST", "/api/action", json_headers(), b"{" + b"x" * 65536
@@ -332,6 +381,25 @@ def test_disappeared_target_returns_conflict_without_dispatching_action(app):
     assert app.fake_agent.calls == []
 
 
+def test_replacement_window_with_same_executable_is_not_targeted(app):
+    app.fake_desktop.windows = [
+        DesktopWindow(
+            "replacement",
+            99,
+            "Different Agent Window",
+            "C:/Apps/agent.exe",
+            PixelRegion(100, 50, 1000, 800),
+        )
+    ]
+
+    response = app.dispatch(
+        "POST", "/api/action", json_headers(), b'{"kind":"scroll","amount":-2}'
+    )
+
+    assert response.status == 409
+    assert app.fake_agent.calls == []
+
+
 def test_action_dispatch_increments_revision(app):
     response = app.dispatch(
         "POST", "/api/action", json_headers(), b'{"kind":"scroll","amount":-2}'
@@ -341,6 +409,22 @@ def test_action_dispatch_increments_revision(app):
     assert payload(response) == {"revision": 1}
     assert app.state.revision == 1
     assert app.fake_agent.calls == [("scroll", -2)]
+
+
+def test_backend_io_failure_returns_structured_service_error(app):
+    def fail_scroll(desktop, target, amount):
+        del desktop, target, amount
+        raise OSError("clipboard unavailable")
+
+    app.fake_agent.scroll = fail_scroll
+
+    response = app.dispatch(
+        "POST", "/api/action", json_headers(), b'{"kind":"scroll","amount":-2}'
+    )
+
+    assert response.status == 503
+    assert payload(response)["error"]["code"] == "backend_error"
+    assert app.state.revision == 0
 
 
 def test_click_rejects_invalid_surface_without_dispatching(app):
@@ -394,6 +478,49 @@ def test_navigator_serializes_agent_snapshot(app):
     assert payload(response)["projects"][0]["tasks"] == [
         {"selected": False, "state": "idle", "title": "Task", "worktree": False}
     ]
+
+
+def test_target_resolution_does_not_overwrite_a_concurrent_selection(app):
+    entered_resolution = threading.Event()
+    release_resolution = threading.Event()
+    original_window = app.fake_desktop.windows[0]
+    result = {}
+
+    def blocked_list_windows():
+        entered_resolution.set()
+        assert release_resolution.wait(2)
+        return list(app.fake_desktop.windows)
+
+    app.fake_desktop.list_windows = blocked_list_windows
+    request_thread = threading.Thread(
+        target=lambda: result.update(
+            response=app.dispatch("GET", "/api/navigator", {}, b"")
+        )
+    )
+    request_thread.start()
+    try:
+        assert entered_resolution.wait(2)
+        replacement_window = DesktopWindow(
+            "window-2",
+            77,
+            "Second Agent Window",
+            "C:/Apps/agent.exe",
+            PixelRegion(100, 50, 1000, 800),
+        )
+        replacement_target = AgentTarget(
+            "fake", replacement_window, app.state.target.surfaces
+        )
+        app.fake_desktop.windows = [original_window, replacement_window]
+        with app.state.state_lock:
+            app.state.target = replacement_target
+            app.state.revision += 1
+    finally:
+        release_resolution.set()
+        request_thread.join(2)
+
+    assert not request_thread.is_alive()
+    assert result["response"].status == 409
+    assert app.state.target is replacement_target
 
 
 def test_calibration_requires_all_three_surfaces_without_saving(app):
@@ -458,6 +585,18 @@ def test_calibration_atomically_saves_target_and_all_surfaces(app):
     assert app.state.revision == 1
 
 
+def test_dispatch_converts_unexpected_exception_to_structured_server_error(app):
+    def fail_list_windows():
+        raise RuntimeError("unexpected registry failure")
+
+    app.fake_desktop.list_windows = fail_list_windows
+
+    response = app.dispatch("GET", "/api/windows", {}, b"")
+
+    assert response.status == 500
+    assert payload(response)["error"]["code"] == "internal_error"
+
+
 def test_http_handler_adapts_live_get_and_post_requests(app):
     with running_server(app) as url:
         with urlopen(f"{url}/api/status") as response:
@@ -475,3 +614,20 @@ def test_http_handler_adapts_live_get_and_post_requests(app):
     assert status_payload["revision"] == 0
     assert action_payload["revision"] == 1
     assert app.fake_agent.calls == [("scroll", -2)]
+
+
+def test_http_handler_converts_unexpected_dispatch_exception_to_json(app):
+    def fail_dispatch(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("unexpected dispatch failure")
+
+    app.dispatch = fail_dispatch
+
+    with running_server(app) as url:
+        with pytest.raises(HTTPError) as raised:
+            urlopen(f"{url}/api/status")
+        error_payload = json.load(raised.value)
+
+    assert raised.value.code == 500
+    assert raised.value.headers["Content-Type"] == "application/json; charset=utf-8"
+    assert error_payload["error"]["code"] == "internal_error"

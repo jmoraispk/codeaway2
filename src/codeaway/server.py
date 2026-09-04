@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from http.server import BaseHTTPRequestHandler
@@ -112,7 +113,14 @@ class Application:
             )
         origin = normalized.get("origin")
         if origin is not None:
-            parsed = urlsplit(origin)
+            try:
+                parsed = urlsplit(origin)
+            except ValueError:
+                return None, self._error(
+                    403,
+                    "origin_mismatch",
+                    "Request Origin must match the CodeAway Host.",
+                )
             host = normalized.get("host")
             if (
                 parsed.scheme.casefold() != "http"
@@ -129,7 +137,7 @@ class Application:
                 )
         try:
             value = json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError):
             return None, self._error(400, "invalid_json", "Request body is not valid JSON.")
         if not isinstance(value, dict):
             return None, self._error(400, "invalid_request", "JSON body must be an object.")
@@ -158,19 +166,35 @@ class Application:
             return self._error(404, "not_found", "Resource not found.")
         return Response(200, content_type, body)
 
+    def _resolve_runtime_target(self, selected: AgentTarget) -> AgentTarget | None:
+        backend = self._backend(selected)
+        if backend is None:
+            return None
+        process_path = os.path.normcase(selected.window.process_path)
+        window = next(
+            (
+                candidate
+                for candidate in self.desktop.list_windows()
+                if candidate.native_handle == selected.window.native_handle
+                and os.path.normcase(candidate.process_path) == process_path
+                and backend.matches(candidate)
+            ),
+            None,
+        )
+        if window is None:
+            return None
+        return AgentTarget(selected.agent_id, window, selected.surfaces)
+
     def _current_target(self) -> AgentTarget | None:
         with self.state.state_lock:
             selected = self.state.target
+            revision = self.state.revision
         if selected is None:
             return None
-        current = self.registry.resolve(
-            self.desktop,
-            selected.agent_id,
-            selected.window.process_path,
-            selected.window.title,
-            selected.surfaces,
-        )
+        current = self._resolve_runtime_target(selected)
         with self.state.state_lock:
+            if self.state.revision != revision or self.state.target is not selected:
+                return None
             self.state.target = current
         return current
 
@@ -235,13 +259,7 @@ class Application:
             )
         if selected is None:
             return self._error(409, "target_unavailable", "Selected window is unavailable.")
-        target = self.registry.resolve(
-            self.desktop,
-            selected.agent_id,
-            selected.window.process_path,
-            selected.window.title,
-            selected.surfaces,
-        )
+        target = self._resolve_runtime_target(selected)
         if target is None:
             return self._error(409, "target_unavailable", "Selected window is unavailable.")
         with self.state.state_lock:
@@ -405,7 +423,7 @@ class Application:
                 revision = self.state.revision
         return self._json_response(200, {"revision": revision})
 
-    def dispatch(
+    def _dispatch(
         self,
         method: str,
         path: str,
@@ -438,6 +456,20 @@ class Application:
                 return self._calibration(value)
         return self._error(404, "not_found", "Resource not found.")
 
+    def dispatch(
+        self,
+        method: str,
+        path: str,
+        headers: Mapping[str, str],
+        body: bytes,
+    ) -> Response:
+        try:
+            return self._dispatch(method, path, headers, body)
+        except OSError:
+            return self._error(503, "backend_error", "Backend operation failed.")
+        except Exception:
+            return self._error(500, "internal_error", "Internal server error.")
+
 
 def make_handler(application: Application, logger: Any | None = None):
     class Handler(BaseHTTPRequestHandler):
@@ -456,12 +488,19 @@ def make_handler(application: Application, logger: Any | None = None):
                     self.close_connection = True
                 else:
                     body = self.rfile.read(content_length)
-                response = application.dispatch(
-                    self.command,
-                    self.path,
-                    dict(self.headers.items()),
-                    body,
-                )
+                try:
+                    response = application.dispatch(
+                        self.command,
+                        self.path,
+                        dict(self.headers.items()),
+                        body,
+                    )
+                except Exception:
+                    if logger is not None:
+                        logger.exception("Unhandled CodeAway request failure")
+                    response = Application._error(
+                        500, "internal_error", "Internal server error."
+                    )
             self.send_response(response.status)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(response.body)))
