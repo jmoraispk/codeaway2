@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import threading
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from importlib import resources
 from io import BytesIO
@@ -23,7 +25,12 @@ from .agents import (
     TargetUnavailable,
 )
 from .config import AppConfig, _parse_config, save_config
-from .desktop import DesktopBackend, FractionalRegion, InputUnavailable
+from .desktop import (
+    AccessibilityUnavailable,
+    DesktopBackend,
+    FractionalRegion,
+    InputUnavailable,
+)
 
 
 _MAX_JSON_BODY = 65_536
@@ -51,6 +58,9 @@ class AppState:
     revision: int = 0
     state_lock: threading.RLock = field(default_factory=threading.RLock)
     action_lock: threading.Lock = field(default_factory=threading.Lock)
+    conversation_png: bytes | None = None
+    conversation_digest: bytes | None = None
+    conversation_token: tuple[object, ...] | None = None
 
 
 class Application:
@@ -228,10 +238,52 @@ class Application:
             self.state.target = current
         return current
 
+    def _clear_conversation_cache_locked(self) -> None:
+        self.state.conversation_png = None
+        self.state.conversation_digest = None
+        self.state.conversation_token = None
+
+    def _capture_png(self, region) -> bytes:
+        image = self.desktop.capture(region)
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
+
+    def _observe_conversation_locked(self, target: AgentTarget) -> None:
+        region = target.surfaces.conversation.resolve(target.window.region)
+        try:
+            png = self._capture_png(region)
+        except Exception:
+            return
+        digest = hashlib.sha256(png).digest()
+        token = self._selection_token(target)
+        with self.state.state_lock:
+            if self._selection_token(self.state.target) != token:
+                return
+            if (
+                self.state.conversation_token == token
+                and self.state.conversation_digest is not None
+                and self.state.conversation_digest != digest
+            ):
+                self.state.revision += 1
+            self.state.conversation_png = png
+            self.state.conversation_digest = digest
+            self.state.conversation_token = token
+
     def _backend(self, target: AgentTarget) -> AgentBackend | None:
         return self.agents.get(target.agent_id)
 
     def _status(self) -> Response:
+        with self.state.action_lock:
+            target = self._current_target()
+            if target is None:
+                with self.state.state_lock:
+                    self._clear_conversation_cache_locked()
+            else:
+                self._observe_conversation_locked(target)
+            return self._status_locked()
+
+    def _status_locked(self) -> Response:
         with self.state.state_lock:
             config = self.state.config
             target = self.state.target
@@ -310,11 +362,16 @@ class Application:
             return self._error(409, "target_unavailable", "Selected window is unavailable.")
         with self.state.state_lock:
             self.state.target = target
+            self._clear_conversation_cache_locked()
             self.state.revision += 1
             revision = self.state.revision
         return self._json_response(200, {"revision": revision})
 
     def _screenshot(self, surface_name: str) -> Response:
+        with self.state.action_lock:
+            return self._screenshot_locked(surface_name)
+
+    def _screenshot_locked(self, surface_name: str) -> Response:
         if surface_name not in _SCREENSHOT_SURFACES:
             return self._error(404, "not_found", "Screenshot surface not found.")
         target = self._current_target()
@@ -325,13 +382,30 @@ class Application:
             if surface_name == "window"
             else getattr(target.surfaces, surface_name).resolve(target.window.region)
         )
+        token = self._selection_token(target)
+        if surface_name == "conversation":
+            with self.state.state_lock:
+                if (
+                    self.state.conversation_token == token
+                    and self.state.conversation_png is not None
+                ):
+                    return Response(
+                        200,
+                        "image/png",
+                        self.state.conversation_png,
+                        {"Cache-Control": "no-store"},
+                    )
         try:
-            image = self.desktop.capture(region)
-            output = BytesIO()
-            image.save(output, format="PNG")
+            png = self._capture_png(region)
         except Exception:
             return self._error(503, "screenshot_failed", "Screenshot capture failed.")
-        return Response(200, "image/png", output.getvalue(), {"Cache-Control": "no-store"})
+        if surface_name == "conversation":
+            with self.state.state_lock:
+                if self._selection_token(self.state.target) == token:
+                    self.state.conversation_png = png
+                    self.state.conversation_digest = hashlib.sha256(png).digest()
+                    self.state.conversation_token = token
+        return Response(200, "image/png", png, {"Cache-Control": "no-store"})
 
     def _navigator(self) -> Response:
         with self.state.action_lock:
@@ -346,6 +420,17 @@ class Application:
             return self._error(409, "target_unavailable", "Selected agent is unavailable.")
         try:
             snapshot = backend.inspect(self.desktop, target)
+        except AccessibilityUnavailable:
+            return self._json_response(
+                200,
+                {
+                    "available": False,
+                    "source": "accessibility",
+                    "projects": [],
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                    "error": "The accessibility navigator is unavailable; screenshots and direct controls remain available.",
+                },
+            )
         except TargetUnavailable:
             return self._error(409, "target_unavailable", "Selected window is unavailable.")
         return self._json_response(200, asdict(snapshot))
@@ -394,6 +479,7 @@ class Application:
                 return self._error(500, "config_save_failed", "Configuration could not be saved.")
             self.state.config = config
             self.state.target = calibrated_target
+            self._clear_conversation_cache_locked()
             self.state.revision += 1
             revision = self.state.revision
         return self._json_response(200, {"revision": revision})
@@ -478,6 +564,7 @@ class Application:
             except (InputUnavailable, TargetUnavailable):
                 return self._error(409, "target_unavailable", "Selected window is unavailable.")
             with self.state.state_lock:
+                self._clear_conversation_cache_locked()
                 self.state.revision += 1
                 revision = self.state.revision
         return self._json_response(200, {"revision": revision})

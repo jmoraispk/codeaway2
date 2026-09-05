@@ -148,6 +148,7 @@ class NavigatorDesktop:
     sidebar: Image.Image
     foreground: bool = True
     capture_regions: list[PixelRegion] = field(default_factory=list)
+    capture_error: Exception | None = None
 
     def accessibility_tree(self, window):
         del window
@@ -159,6 +160,8 @@ class NavigatorDesktop:
 
     def capture(self, region):
         self.capture_regions.append(region)
+        if self.capture_error is not None:
+            raise self.capture_error
         return self.sidebar
 
 
@@ -380,6 +383,26 @@ def test_codex_inspect_never_captures_or_assumes_idle_when_not_foreground(
         TaskSnapshot("Running task", "busy", worktree=False, selected=False),
     )
     assert desktop.capture_regions == []
+
+
+def test_codex_inspect_keeps_uia_results_when_optional_marker_capture_fails(
+    codex_window, navigator_nodes
+):
+    desktop = NavigatorDesktop(
+        navigator_nodes,
+        Image.new("RGB", (300, 140), "#101010"),
+        capture_error=OSError("screen capture unavailable"),
+    )
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert snapshot.available is True
+    assert snapshot.source == "accessibility"
+    assert snapshot.projects[0].tasks == (
+        TaskSnapshot("Finished task", "unknown", worktree=True, selected=True),
+        TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+    )
 
 
 def test_project_identity_uses_only_the_sibling_label_on_its_row(codex_window):

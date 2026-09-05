@@ -3,11 +3,14 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from http.server import ThreadingHTTPServer
+from io import BytesIO
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 from PIL import Image
+
+import codeaway.desktop as desktop_module
 
 from codeaway.agents import (
     AgentRegistry,
@@ -28,13 +31,14 @@ from codeaway.server import AppState, Application, make_handler
 class FakeDesktop:
     windows: list[DesktopWindow]
     capture_calls: list[PixelRegion] = field(default_factory=list)
+    capture_color: str = "#123456"
 
     def list_windows(self):
         return list(self.windows)
 
     def capture(self, region):
         self.capture_calls.append(region)
-        return Image.new("RGB", (region.width, region.height), "#123456")
+        return Image.new("RGB", (region.width, region.height), self.capture_color)
 
 
 @dataclass
@@ -153,6 +157,36 @@ def test_status_reports_selection_readiness_and_revision(app):
         "setup_complete": False,
         "target": {"agent_id": "fake", "title": "Agent Window"},
     }
+
+
+def test_status_advances_revision_when_conversation_pixels_change_without_action(app):
+    first = payload(app.dispatch("GET", "/api/status", {}, b""))
+    unchanged = payload(app.dispatch("GET", "/api/status", {}, b""))
+    app.fake_desktop.capture_color = "#abcdef"
+    changed = payload(app.dispatch("GET", "/api/status", {}, b""))
+    capture_count = len(app.fake_desktop.capture_calls)
+
+    screenshot = app.dispatch("GET", "/api/screenshot/conversation", {}, b"")
+
+    assert [first["revision"], unchanged["revision"], changed["revision"]] == [
+        0,
+        0,
+        1,
+    ]
+    assert len(app.fake_desktop.capture_calls) == capture_count
+    with Image.open(BytesIO(screenshot.body)) as image:
+        assert image.getpixel((0, 0)) == (171, 205, 239)
+
+    action = app.dispatch(
+        "POST", "/api/action", json_headers(), b'{"kind":"scroll","amount":-2}'
+    )
+    app.fake_desktop.capture_color = "#fedcba"
+    refreshed = app.dispatch("GET", "/api/screenshot/conversation", {}, b"")
+
+    assert payload(action)["revision"] == 2
+    assert len(app.fake_desktop.capture_calls) == capture_count + 1
+    with Image.open(BytesIO(refreshed.body)) as image:
+        assert image.getpixel((0, 0)) == (254, 220, 186)
 
 
 def test_windows_returns_compatible_discovery_results(app):
@@ -589,6 +623,34 @@ def test_navigator_serializes_agent_snapshot(app):
     assert payload(response)["projects"][0]["tasks"] == [
         {"selected": False, "state": "idle", "title": "Task", "worktree": False}
     ]
+
+
+def test_accessibility_failure_returns_unavailable_navigator_without_blocking_pixels(
+    app,
+):
+    error_type = getattr(desktop_module, "AccessibilityUnavailable", RuntimeError)
+
+    def fail_inspect(desktop, target):
+        del desktop, target
+        raise error_type("UI Automation unavailable")
+
+    app.fake_agent.inspect = fail_inspect
+
+    navigator = app.dispatch("GET", "/api/navigator", {}, b"")
+    screenshot = app.dispatch("GET", "/api/screenshot/conversation", {}, b"")
+    click = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"click","surface":"conversation","x":0.5,"y":0.5}',
+    )
+
+    assert navigator.status == 200
+    assert payload(navigator)["available"] is False
+    assert payload(navigator)["projects"] == []
+    assert "accessibility" in payload(navigator)["error"].casefold()
+    assert screenshot.status == 200
+    assert click.status == 200
 
 
 def test_concurrent_navigator_reads_are_serialized(app):

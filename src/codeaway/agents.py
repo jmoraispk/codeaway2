@@ -282,7 +282,10 @@ class CodexAgent:
         sidebar_region = target.surfaces.sidebar.resolve(target.window.region)
         sidebar_image = None
         if desktop.is_foreground(target.window):
-            sidebar_image = desktop.capture(sidebar_region)
+            try:
+                sidebar_image = desktop.capture(sidebar_region)
+            except Exception:
+                sidebar_image = None
 
         projects: list[ProjectSnapshot] = []
         for row in self._rows(nodes):

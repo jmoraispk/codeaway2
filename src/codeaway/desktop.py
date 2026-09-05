@@ -88,6 +88,10 @@ class InputUnavailable(RuntimeError):
     """Global input was aborted because its exact target was not safe."""
 
 
+class AccessibilityUnavailable(RuntimeError):
+    """The desktop accessibility provider could not produce a control tree."""
+
+
 class DesktopBackend(Protocol):
     id: str
 
@@ -172,25 +176,33 @@ class WindowsDesktop:
         )
 
     def accessibility_tree(self, window: DesktopWindow) -> list[AccessibilityNode]:
-        self._tree_version += 1
-        self._node_controls = {}
-        nodes: list[AccessibilityNode] = []
-        for index, control in enumerate(self._native.accessibility_tree(window.native_handle)):
-            node_id = f"tree-{self._tree_version}-{index}"
-            self._node_controls[node_id] = control.id
-            nodes.append(
-                AccessibilityNode(
-                    id=node_id,
-                    role=control.role,
-                    name=control.name,
-                    class_name=control.class_name,
-                    region=control.region,
-                    depth=control.depth,
-                    expanded=control.expanded,
-                    actions=control.actions,
+        try:
+            controls = self._native.accessibility_tree(window.native_handle)
+            self._tree_version += 1
+            self._node_controls = {}
+            nodes: list[AccessibilityNode] = []
+            for index, control in enumerate(controls):
+                node_id = f"tree-{self._tree_version}-{index}"
+                self._node_controls[node_id] = control.id
+                nodes.append(
+                    AccessibilityNode(
+                        id=node_id,
+                        role=control.role,
+                        name=control.name,
+                        class_name=control.class_name,
+                        region=control.region,
+                        depth=control.depth,
+                        expanded=control.expanded,
+                        actions=control.actions,
+                    )
                 )
-            )
-        return nodes
+            return nodes
+        except AccessibilityUnavailable:
+            raise
+        except Exception as error:
+            raise AccessibilityUnavailable(
+                "desktop accessibility is unavailable"
+            ) from error
 
     def accessibility_action(
         self, node: AccessibilityNode, action: AccessibilityAction

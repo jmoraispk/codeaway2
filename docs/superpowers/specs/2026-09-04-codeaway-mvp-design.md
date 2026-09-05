@@ -304,10 +304,12 @@ Setup:
 Phone refresh:
 
 1. The browser requests status and navigator data.
-2. `CodexAgent` interprets the generic accessibility tree and sampled pixels
-   supplied by `WindowsDesktop`.
-3. The server serializes the agent snapshot and exposes the cropped
-   conversation PNG.
+2. During status polling, the server captures and hashes the Conversation PNG,
+   caches its bytes, and increments revision only when those bytes change.
+3. `CodexAgent` interprets the generic accessibility tree and optional sampled
+   marker pixels supplied by `WindowsDesktop`.
+4. The server serializes the agent snapshot and exposes the revision-matched
+   cached conversation PNG.
 
 Action:
 

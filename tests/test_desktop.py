@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import codeaway.desktop as desktop_module
+
 from codeaway.desktop import (
     AccessibilityAction,
     AccessibilityNode,
@@ -21,6 +23,7 @@ from codeaway.desktop import (
 class FakeWindowsNative:
     windows: list[_NativeWindow] = field(default_factory=list)
     controls: list[_NativeControl] = field(default_factory=list)
+    accessibility_error: Exception | None = None
     activate_result: bool = True
     foreground_handle: int | None = None
     foreground_results: list[bool] = field(default_factory=list)
@@ -49,6 +52,8 @@ class FakeWindowsNative:
 
     def accessibility_tree(self, native_handle):
         assert native_handle == 10
+        if self.accessibility_error is not None:
+            raise self.accessibility_error
         return self.controls
 
     def accessibility_action(self, control_id, action):
@@ -156,6 +161,17 @@ def test_accessibility_tree_converts_native_controls_to_serializable_nodes(nativ
         )
     ]
     assert nodes[0].id.startswith("tree-1-")
+
+
+def test_accessibility_tree_raises_typed_unavailable_error(native, desktop_window):
+    native.accessibility_error = RuntimeError("UI Automation unavailable")
+    expected_type = getattr(desktop_module, "AccessibilityUnavailable", RuntimeError)
+
+    with pytest.raises(expected_type) as raised:
+        WindowsDesktop(native).accessibility_tree(desktop_window)
+
+    assert type(raised.value).__name__ == "AccessibilityUnavailable"
+    assert "accessibility" in str(raised.value).casefold()
 
 
 def test_accessibility_action_dispatches_requested_pattern(native, desktop_window):
