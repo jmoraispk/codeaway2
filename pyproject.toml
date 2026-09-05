@@ -21,6 +21,11 @@ codeaway = "codeaway.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/codeaway"]
+artifacts = [
+  "src/codeaway/web/*.html",
+  "src/codeaway/web/*.css",
+  "src/codeaway/web/*.js",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

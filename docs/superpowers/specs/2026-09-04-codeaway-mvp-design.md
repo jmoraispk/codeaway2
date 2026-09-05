@@ -223,6 +223,11 @@ The Python package embeds plain HTML, CSS, and JavaScript files under
 `codeaway.web`. `importlib.resources` loads them from both editable installs
 and built wheels.
 
+The setup diagram gives exact capture guidance: **Sidebar** is the projects and
+tasks on the left, **Conversation** is the right pane above the input, and
+**Composer** is the chat box only, which may grow taller. The Composer capture
+must exclude the full-width toolbar and status row.
+
 `/setup` provides:
 
 - Detected compatible agent windows.
@@ -373,3 +378,9 @@ uvx codeaway
 ```
 
 Frequent users can install it persistently with `uv tool install codeaway`.
+
+The release workflow runs the Python suite, browser suite, distribution build,
+and a clean wheel-install `codeaway --help` check on Windows with Python 3.11,
+Windows with Python 3.13, and Ubuntu with Python 3.13. Ubuntu validates the
+portable package and help surface; Windows with Codex Desktop remains the only
+supported v0.1 runtime pair.

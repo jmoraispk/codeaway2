@@ -1,10 +1,49 @@
 # CodeAway
 
 CodeAway is a thin, browser-based remote control for local AI coding agents.
-The source repository is `codeaway2`; the Python package and command are
+Version 0.1 supports one pairing only: **Windows with Codex Desktop**. The
+source repository is `codeaway2`; the Python package and command are
 `codeaway`.
 
-> Status: MVP design. The package is not published yet.
+> Status: release-ready MVP. The package is not published yet.
+
+## Run CodeAway
+
+The first run is laptop-only. Start CodeAway in the foreground:
+
+```powershell
+uvx codeaway
+```
+
+It listens on `127.0.0.1:8765` and opens `/setup` in the laptop browser. Choose
+the visible Codex Desktop window and draw all three capture regions:
+
+- **Sidebar:** the projects and tasks on the left.
+- **Conversation:** the right pane above the input.
+- **Composer:** the chat box only; it may grow taller. Do not include the
+  full-width toolbar or status row.
+
+To enable phone access, restart with an address assigned to the laptop on your
+LAN or Tailscale network:
+
+```powershell
+uvx codeaway --ip <LAN-or-Tailscale-IP>
+```
+
+The explicit address is saved only after it binds successfully. Later
+`uvx codeaway` launches reuse both that address and the saved calibration. If
+the saved Codex window and all three regions resolve, CodeAway prints the phone
+workspace URL without opening a laptop browser. The phone workspace still
+links to `/setup` when recalibration is needed.
+
+If a cached address is no longer available, CodeAway warns, falls back to
+`127.0.0.1`, and saves that fallback. An invalid explicit address exits instead
+of silently changing interfaces. Use `--no-browser` to suppress an otherwise
+necessary setup launch and `--port PORT` to select and cache another port.
+
+> **Security:** A non-loopback endpoint grants full desktop mouse and keyboard
+> input control to every device that can reach it. CodeAway v0.1 has no pairing
+> or authentication, so expose it only on a network boundary you trust.
 
 ## Architecture
 
@@ -12,36 +51,12 @@ CodeAway deliberately separates two independent backend axes:
 
 | Module | Backends | Responsibility |
 | --- | --- | --- |
-| `agents.py` | Codex first; Claude Code and Cursor later | Agent-specific detection, state, navigation, surfaces, and actions |
-| `desktop.py` | Windows first; macOS and Linux later | OS-specific windows, screenshots, accessibility, mouse, keyboard, and clipboard operations |
+| `agents.py` | Codex first; Claude Code and Cursor later | Owns application semantics: detection, projects and tasks, navigation, calibrated surfaces, and actions |
+| `desktop.py` | Windows first; macOS and Linux later | Owns OS mechanics: windows, screenshots, accessibility, mouse, keyboard, and clipboard operations |
 
 The server composes one agent backend with one desktop backend. For the first
 release that pair is Codex Desktop on Windows. Agent backends do not contain
 Windows APIs, and desktop backends do not contain Codex-specific behavior.
-
-## Intended usage
-
-After publication, run CodeAway in the foreground with:
-
-```powershell
-uvx codeaway
-```
-
-The default bind address is `127.0.0.1`. To reach CodeAway from a phone, bind
-it explicitly to an address on the laptop, typically its Tailscale IP:
-
-```powershell
-uvx codeaway --ip 100.x.x.x
-```
-
-The selected address is cached for later launches. CodeAway falls back to
-`127.0.0.1` with a warning if a cached address is no longer available.
-
-On the first run, a browser setup page shows a labeled capture diagram and lets
-you calibrate Sidebar, Conversation, and Composer over a screenshot of the
-agent window. CodeAway saves that calibration. Later launches reuse it and do
-not reopen the laptop setup page unless the saved target or calibration needs
-attention.
 
 See the [MVP design](docs/superpowers/specs/2026-09-04-codeaway-mvp-design.md)
 for the approved scope and data flow.
