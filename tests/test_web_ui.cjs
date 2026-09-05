@@ -140,3 +140,28 @@ test("gestures require a loaded revision and a natural image", async () => {
   assert.equal(controller.canHandleGesture({ naturalWidth: 0 }), false);
   assert.equal(controller.canHandleGesture({ naturalWidth: 100 }), true);
 });
+
+test("a stale poll cannot override a newer action image request", async () => {
+  const requests = [];
+  let completeNewerImage;
+  const controller = createPhoneController({
+    postAction: async () => ({ revision: 4 }),
+    requestImage: (revision) => {
+      requests.push(revision);
+      if (revision === 4) {
+        return new Promise((resolve) => { completeNewerImage = resolve; });
+      }
+      return Promise.resolve();
+    },
+  });
+
+  const action = controller.performAction({ kind: "scroll", amount: -1 });
+  await Promise.resolve();
+  await controller.refreshConversation(3);
+
+  assert.deepEqual(requests, [4]);
+  completeNewerImage();
+  await action;
+  assert.equal(controller.imageRevision, 4);
+  assert.equal(controller.conversationError, "");
+});

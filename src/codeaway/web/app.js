@@ -92,6 +92,7 @@ function createPhoneController({ postAction, requestImage, onComposerClear = () 
     composerText: "",
     conversationError: "",
     imageRevision: null,
+    imageRequestToken: 0,
     requestedImageRevision: null,
   };
   const controller = {
@@ -101,6 +102,9 @@ function createPhoneController({ postAction, requestImage, onComposerClear = () 
     get conversationError() {
       return state.conversationError;
     },
+    get imageRevision() {
+      return state.imageRevision;
+    },
     setComposerText(text) {
       state.composerText = text;
     },
@@ -108,15 +112,22 @@ function createPhoneController({ postAction, requestImage, onComposerClear = () 
       return state.imageRevision !== null && image.naturalWidth > 0;
     },
     async refreshConversation(revision, successfulAction = false) {
-      if (!successfulAction && revision === state.requestedImageRevision) return false;
+      if (
+        !successfulAction
+        && state.requestedImageRevision !== null
+        && revision <= state.requestedImageRevision
+      ) return false;
       state.requestedImageRevision = revision;
       state.imageRevision = null;
+      const requestToken = ++state.imageRequestToken;
       try {
         await requestImage(revision);
+        if (requestToken !== state.imageRequestToken) return false;
         state.imageRevision = revision;
         state.conversationError = "";
         return true;
       } catch (_) {
+        if (requestToken !== state.imageRequestToken) return false;
         state.conversationError = "The conversation image could not be refreshed.";
         return false;
       }
