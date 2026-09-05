@@ -245,7 +245,7 @@ def test_registry_resolve_prefers_exact_title_and_saved_surfaces():
     assert result == AgentTarget("fake", exact_window, saved)
 
 
-def test_registry_resolve_rejects_same_process_window_not_matching_agent():
+def test_registry_resolve_rejects_missing_title_hint_even_with_one_matching_window():
     rejected_window = DesktopWindow(
         "rejected", 1, "Rejected", "C:/Apps/Fake.exe", PixelRegion(0, 0, 1000, 800)
     )
@@ -262,7 +262,52 @@ def test_registry_resolve_rejects_same_process_window_not_matching_agent():
 
     result = registry.resolve(desktop, "fake", "c:/apps/fake.exe", None, saved)
 
-    assert result == AgentTarget("fake", accepted_window, saved)
+    assert result is None
+
+
+def test_registry_resolve_rejects_a_different_same_process_window():
+    different_window = DesktopWindow(
+        "different", 1, "Different Editor", "C:/Apps/Fake.exe", PixelRegion(0, 0, 1000, 800)
+    )
+    desktop = FakeDesktop([different_window])
+    registry = AgentRegistry([FakeAgent()])
+    saved = SurfaceMap(
+        FractionalRegion(0.0, 0.0, 0.1, 1.0),
+        FractionalRegion(0.1, 0.0, 0.8, 0.8),
+        FractionalRegion(0.1, 0.8, 0.8, 0.2),
+    )
+
+    result = registry.resolve(
+        desktop, "fake", "c:/apps/fake.exe", "Saved Editor", saved
+    )
+
+    assert result is None
+
+
+def test_registry_resolve_rejects_duplicate_exact_title_windows():
+    windows = [
+        DesktopWindow(
+            f"duplicate-{index}",
+            index,
+            "Saved Editor",
+            "C:/Apps/Fake.exe",
+            PixelRegion(0, 0, 1000, 800),
+        )
+        for index in (1, 2)
+    ]
+    desktop = FakeDesktop(windows)
+    registry = AgentRegistry([FakeAgent()])
+    saved = SurfaceMap(
+        FractionalRegion(0.0, 0.0, 0.1, 1.0),
+        FractionalRegion(0.1, 0.0, 0.8, 0.8),
+        FractionalRegion(0.1, 0.8, 0.8, 0.2),
+    )
+
+    result = registry.resolve(
+        desktop, "fake", "c:/apps/fake.exe", "Saved Editor", saved
+    )
+
+    assert result is None
 
 
 @pytest.mark.parametrize(
@@ -419,6 +464,37 @@ def test_task_markers_ignore_same_y_icons_outside_the_task_row(
     assert snapshot.projects[0].tasks[1] == TaskSnapshot(
         "Running task", "unknown", worktree=False, selected=False
     )
+
+
+def test_connected_marker_must_overlap_its_project_row_horizontally(codex_window):
+    nodes = (
+        AccessibilityNode(
+            "project",
+            "Button",
+            "Project",
+            "group/folder-row sidebar-item",
+            PixelRegion(100, 50, 300, 30),
+            expanded=True,
+        ),
+        AccessibilityNode(
+            "distant-connected",
+            "ImageControl",
+            "Connected",
+            "",
+            PixelRegion(800, 50, 16, 30),
+        ),
+    )
+    desktop = NavigatorDesktop(
+        nodes,
+        Image.new("RGB", (300, 140), "#101010"),
+        foreground=False,
+    )
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert snapshot.projects[0].connected is False
+    assert snapshot.projects[0].state == "idle"
 
 
 @pytest.mark.parametrize("action_name", ["navigate", "click", "scroll", "send"])

@@ -118,27 +118,20 @@ class AgentRegistry:
         if agent is None:
             return None
         windows = desktop.list_windows()
+        normalized_process_path = os.path.normcase(os.path.normpath(process_path))
         candidates = [
             window
             for window in windows
-            if os.path.normcase(window.process_path) == os.path.normcase(process_path)
+            if os.path.normcase(os.path.normpath(window.process_path))
+            == normalized_process_path
             and agent.matches(window)
         ]
-        if not candidates:
+        if title_hint is None:
             return None
-
-        selected = None
-        if title_hint is not None:
-            selected = next((window for window in candidates if window.title == title_hint), None)
-            if selected is None:
-                title_lower = title_hint.casefold()
-                selected = next(
-                    (window for window in candidates if title_lower in window.title.casefold()),
-                    None,
-                )
-        if selected is None:
-            selected = candidates[0]
-        return AgentTarget(agent_id, selected, surfaces)
+        exact_matches = [window for window in candidates if window.title == title_hint]
+        if len(exact_matches) != 1:
+            return None
+        return AgentTarget(agent_id, exact_matches[0], surfaces)
 
 
 class TargetUnavailable(RuntimeError):
@@ -314,6 +307,7 @@ class CodexAgent:
                 node.role.casefold() in {"image", "imagecontrol"}
                 and node.name == "Connected"
                 and self._same_row(row.node, node)
+                and self._overlaps_horizontally(row.node, node)
                 for node in nodes
             )
             project_state: Literal["connected", "busy", "idle"]
