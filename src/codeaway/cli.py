@@ -87,13 +87,13 @@ def _print_bind_error(label: str, address: str, port: int, error: OSError) -> No
     )
 
 
-def start(argv: Sequence[str] | None = None, runtime: Runtime | None = None) -> StartResult:
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    no_serve = False
-    while "--no-serve" in arguments:
-        arguments.remove("--no-serve")
-        no_serve = True
-    options = _parser().parse_args(arguments)
+def start(
+    argv: Sequence[str] | None = None,
+    runtime: Runtime | None = None,
+    *,
+    _serve: bool = True,
+) -> StartResult:
+    options = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     runtime = runtime or Runtime()
 
     config_path = Path(runtime.config_path_factory())
@@ -175,7 +175,7 @@ def start(argv: Sequence[str] | None = None, runtime: Runtime | None = None) -> 
     if target is None and not options.no_browser:
         runtime.browser_open(f"{url}setup")
 
-    if no_serve:
+    if not _serve:
         server.server_close()
         return StartResult(0, url)
 

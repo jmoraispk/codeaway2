@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import codeaway.cli as cli
 from codeaway.agents import AgentTarget, SurfaceMap
 from codeaway.cli import StartResult, start
 from codeaway.config import AppConfig, WindowHint, load_config, save_config
@@ -131,7 +132,7 @@ def test_valid_saved_target_and_calibration_do_not_open_setup(runtime):
     runtime.config = complete_config()
     runtime.registry.resolved_target = codex_target()
 
-    result = start(["--no-serve"], runtime)
+    result = start([], runtime, _serve=False)
 
     assert result == StartResult(0, "http://127.0.0.1:8765/")
     assert runtime.browser_urls == []
@@ -141,7 +142,7 @@ def test_saved_target_resolution_uses_stable_hints_and_calibration(runtime):
     runtime.config = complete_config()
     runtime.registry.resolved_target = codex_target()
 
-    start(["--no-serve"], runtime)
+    start([], runtime, _serve=False)
 
     assert runtime.registry.resolve_calls == [
         (
@@ -157,7 +158,7 @@ def test_saved_target_resolution_uses_stable_hints_and_calibration(runtime):
 def test_first_run_opens_setup(runtime):
     runtime.config = AppConfig()
 
-    start(["--no-serve"], runtime)
+    start([], runtime, _serve=False)
 
     assert runtime.browser_urls == ["http://127.0.0.1:8765/setup"]
 
@@ -165,16 +166,31 @@ def test_first_run_opens_setup(runtime):
 def test_no_browser_suppresses_setup_browser_launch(runtime):
     runtime.config = AppConfig()
 
-    start(["--no-browser", "--no-serve"], runtime)
+    start(["--no-browser"], runtime, _serve=False)
 
     assert runtime.browser_urls == []
+
+
+def test_public_main_rejects_no_serve_before_bind_or_config_mutation(
+    runtime, monkeypatch
+):
+    original = complete_config("100.64.0.10")
+    runtime.config = original
+    monkeypatch.setattr(cli, "Runtime", lambda: runtime)
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--no-serve"])
+
+    assert raised.value.code == 2
+    assert runtime.server_addresses == []
+    assert runtime.config == original
 
 
 def test_explicit_ip_wins_and_is_cached_only_after_successful_bind(runtime):
     runtime.config = complete_config("100.64.0.10")
     runtime.registry.resolved_target = codex_target(runtime.config)
 
-    result = start(["--ip", "192.168.1.50", "--no-serve"], runtime)
+    result = start(["--ip", "192.168.1.50"], runtime, _serve=False)
 
     assert result == StartResult(0, "http://192.168.1.50:8765/")
     assert runtime.server_addresses == [("192.168.1.50", 8765)]
@@ -188,7 +204,7 @@ def test_cached_bind_failure_warns_falls_back_and_persists_loopback(runtime, cap
     runtime.registry.resolved_target = codex_target(original)
     runtime.bind_failures.add("100.64.0.10")
 
-    result = start(["--no-serve"], runtime)
+    result = start([], runtime, _serve=False)
 
     assert result == StartResult(0, "http://127.0.0.1:8765/")
     assert runtime.server_addresses == [
@@ -206,7 +222,7 @@ def test_explicit_bind_failure_returns_nonzero_and_preserves_cache(runtime, caps
     runtime.config = original
     runtime.bind_failures.add("192.168.1.50")
 
-    result = start(["--ip", "192.168.1.50", "--no-serve"], runtime)
+    result = start(["--ip", "192.168.1.50"], runtime, _serve=False)
 
     assert result.exit_code != 0
     assert result.url is None
@@ -219,7 +235,7 @@ def test_non_loopback_bind_prints_full_control_warning_and_phone_url(runtime, ca
     runtime.config = AppConfig()
 
     result = start(
-        ["--ip", "100.64.0.10", "--no-browser", "--no-serve"], runtime
+        ["--ip", "100.64.0.10", "--no-browser"], runtime, _serve=False
     )
 
     output = capsys.readouterr().out
@@ -233,7 +249,7 @@ def test_temporarily_absent_saved_target_opens_setup_without_erasing_calibration
     runtime.config = original
     runtime.registry.resolved_target = None
 
-    start(["--no-serve"], runtime)
+    start([], runtime, _serve=False)
 
     assert runtime.browser_urls == ["http://127.0.0.1:8765/setup"]
     assert load_config(runtime.config_path).config == original
@@ -242,7 +258,7 @@ def test_temporarily_absent_saved_target_opens_setup_without_erasing_calibration
 def test_loader_warnings_are_printed_before_startup(runtime, capsys):
     runtime.config_path.write_text("not json", encoding="utf-8")
 
-    start(["--no-browser", "--no-serve"], runtime)
+    start(["--no-browser"], runtime, _serve=False)
 
     assert "Invalid configuration; using defaults." in capsys.readouterr().err
 
@@ -250,7 +266,7 @@ def test_loader_warnings_are_printed_before_startup(runtime, capsys):
 def test_unsupported_desktop_exits_with_actionable_message(runtime, capsys):
     runtime.desktop_error = RuntimeError("Windows with Codex Desktop is required")
 
-    result = start(["--no-serve"], runtime)
+    result = start([], runtime, _serve=False)
 
     assert result.exit_code != 0
     assert "Windows with Codex Desktop is required" in capsys.readouterr().err
@@ -260,7 +276,9 @@ def test_unsupported_desktop_exits_with_actionable_message(runtime, capsys):
 def test_port_override_is_bound_and_saved(runtime):
     runtime.config = AppConfig(port=9000)
 
-    result = start(["--port", "9876", "--no-browser", "--no-serve"], runtime)
+    result = start(
+        ["--port", "9876", "--no-browser"], runtime, _serve=False
+    )
 
     assert result.url == "http://127.0.0.1:9876/"
     assert runtime.server_addresses == [("127.0.0.1", 9876)]
