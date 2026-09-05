@@ -11,6 +11,7 @@ from codeaway.desktop import (
     AccessibilityNode,
     DesktopWindow,
     FractionalRegion,
+    InputUnavailable,
     PixelPoint,
     PixelRegion,
     WindowsDesktop,
@@ -201,6 +202,54 @@ def test_activation_and_coordinate_input_pin_dpi_before_native_operations(
         ("foreground", 10),
         ("scroll", 10, 2560, 100, -120),
     ]
+
+
+@pytest.mark.parametrize("operation", ["activate", "click", "scroll"])
+def test_failed_dpi_pin_stops_operations_before_the_native_boundary(
+    monkeypatch, native, desktop_window, operation
+):
+    calls = []
+
+    monkeypatch.setattr(
+        desktop_module,
+        "_pin_thread_v2_dpi",
+        lambda: calls.append("dpi") or False,
+    )
+    monkeypatch.setattr(
+        native,
+        "activate",
+        lambda native_handle: calls.append(("activate", native_handle)) or True,
+    )
+    monkeypatch.setattr(
+        native,
+        "is_foreground",
+        lambda native_handle: calls.append(("foreground", native_handle)) or True,
+    )
+    monkeypatch.setattr(
+        native,
+        "click",
+        lambda native_handle, x, y: calls.append(("click", native_handle, x, y)) or True,
+    )
+    monkeypatch.setattr(
+        native,
+        "scroll",
+        lambda native_handle, x, y, amount: calls.append(
+            ("scroll", native_handle, x, y, amount)
+        )
+        or True,
+    )
+    desktop = WindowsDesktop(native)
+
+    if operation == "activate":
+        assert desktop.activate(desktop_window) is False
+    elif operation == "click":
+        with pytest.raises(InputUnavailable, match="DPI"):
+            desktop.click(desktop_window, PixelPoint(2560, 100))
+    else:
+        with pytest.raises(InputUnavailable, match="DPI"):
+            desktop.scroll(desktop_window, PixelPoint(2560, 100), -3)
+
+    assert calls == ["dpi"]
 
 
 def test_scroll_uses_forty_units_per_logical_step(native):

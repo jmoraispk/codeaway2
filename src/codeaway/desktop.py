@@ -184,7 +184,8 @@ class WindowsDesktop:
         ]
 
     def activate(self, window: DesktopWindow) -> bool:
-        _pin_thread_v2_dpi()
+        if not _pin_thread_v2_dpi():
+            return False
         return self._native.activate(window.native_handle)
 
     def is_foreground(self, window: DesktopWindow) -> bool:
@@ -240,7 +241,8 @@ class WindowsDesktop:
             raise InputUnavailable("the exact target window is not foreground")
 
     def click(self, window: DesktopWindow, point: PixelPoint) -> None:
-        _pin_thread_v2_dpi()
+        if not _pin_thread_v2_dpi():
+            raise InputUnavailable("physical DPI coordinate context is unavailable")
         self._require_foreground(window)
         if not self._native.click(window.native_handle, point.x, point.y):
             raise InputUnavailable(
@@ -250,7 +252,8 @@ class WindowsDesktop:
     def scroll(
         self, window: DesktopWindow, point: PixelPoint, amount: int
     ) -> None:
-        _pin_thread_v2_dpi()
+        if not _pin_thread_v2_dpi():
+            raise InputUnavailable("physical DPI coordinate context is unavailable")
         self._require_foreground(window)
         if not self._native.scroll(
             window.native_handle, point.x, point.y, amount * 40
