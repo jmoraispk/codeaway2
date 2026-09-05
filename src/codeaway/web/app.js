@@ -87,6 +87,56 @@ function createSetupModel(surfaces, status) {
   return model;
 }
 
+function createPhoneController({ postAction, requestImage, onComposerClear = () => {} }) {
+  const state = {
+    composerText: "",
+    conversationError: "",
+    imageRevision: null,
+    requestedImageRevision: null,
+  };
+  const controller = {
+    get composerText() {
+      return state.composerText;
+    },
+    get conversationError() {
+      return state.conversationError;
+    },
+    setComposerText(text) {
+      state.composerText = text;
+    },
+    canHandleGesture(image) {
+      return state.imageRevision !== null && image.naturalWidth > 0;
+    },
+    async refreshConversation(revision, successfulAction = false) {
+      if (!successfulAction && revision === state.requestedImageRevision) return false;
+      state.requestedImageRevision = revision;
+      state.imageRevision = null;
+      try {
+        await requestImage(revision);
+        state.imageRevision = revision;
+        state.conversationError = "";
+        return true;
+      } catch (_) {
+        state.conversationError = "The conversation image could not be refreshed.";
+        return false;
+      }
+    },
+    async performAction(value) {
+      const result = await postAction(value);
+      await controller.refreshConversation(result.revision, true);
+      return result;
+    },
+    async send() {
+      const result = await postAction({ kind: "send", text: state.composerText });
+      state.composerText = "";
+      onComposerClear();
+      await controller.refreshConversation(result.revision, true);
+      return result;
+    },
+  };
+  return controller;
+}
+
 function initializePhoneWorkspace() {
   const elements = {
     composer: document.querySelector("#composer"),
@@ -102,7 +152,6 @@ function initializePhoneWorkspace() {
     actionBusy: false,
     expanded: {},
     gesture: null,
-    imageRevision: null,
     navigator: null,
     pollTimer: null,
     refreshing: null,
@@ -223,8 +272,7 @@ function initializePhoneWorkspace() {
     }
   }
 
-  function replaceConversation(revision) {
-    if (revision === state.imageRevision) return Promise.resolve();
+  function requestConversationImage(revision) {
     return new Promise((resolve, reject) => {
       const image = elements.conversationImage;
       const cleanup = () => {
@@ -233,7 +281,6 @@ function initializePhoneWorkspace() {
       };
       const loaded = () => {
         cleanup();
-        state.imageRevision = revision;
         resolve();
       };
       const failed = () => {
@@ -246,13 +293,27 @@ function initializePhoneWorkspace() {
     });
   }
 
+  const phone = createPhoneController({
+    postAction: (value) => request("/api/action", actionRequest(value)),
+    requestImage: requestConversationImage,
+    onComposerClear: () => { elements.composerInput.value = ""; },
+  });
+
+  function showConversationRefreshStatus() {
+    showMessage(
+      elements.conversationMessage,
+      phone.conversationError,
+      Boolean(phone.conversationError),
+    );
+  }
+
   async function performAction(value) {
     if (state.actionBusy) return;
     state.actionBusy = true;
     try {
-      const result = await request("/api/action", actionRequest(value));
+      const result = await phone.performAction(value);
       state.revision = result.revision;
-      await replaceConversation(result.revision);
+      showConversationRefreshStatus();
       return result;
     } finally {
       state.actionBusy = false;
@@ -271,11 +332,8 @@ function initializePhoneWorkspace() {
         if (state.revision === null || status.revision >= state.revision) {
           state.revision = status.revision;
           renderStatus(status);
-          try {
-            await replaceConversation(status.revision);
-          } catch (error) {
-            showMessage(elements.conversationMessage, error.message, true);
-          }
+          await phone.refreshConversation(status.revision);
+          showConversationRefreshStatus();
         }
       } else {
         showMessage(elements.statusMessage, statusResult.reason.message, true);
@@ -307,7 +365,7 @@ function initializePhoneWorkspace() {
   }
 
   elements.conversationImage.addEventListener("pointerdown", (event) => {
-    if (state.actionBusy || !elements.conversationImage.complete) return;
+    if (state.actionBusy || !phone.canHandleGesture(elements.conversationImage)) return;
     event.preventDefault();
     state.gesture = { id: event.pointerId, x: event.clientX, y: event.clientY };
     elements.conversationImage.setPointerCapture(event.pointerId);
@@ -329,7 +387,7 @@ function initializePhoneWorkspace() {
     if (!action) return;
     try {
       await performAction(action);
-      showMessage(elements.conversationMessage, "");
+      showConversationRefreshStatus();
     } catch (error) {
       showMessage(elements.conversationMessage, error.message, true);
     }
@@ -342,14 +400,20 @@ function initializePhoneWorkspace() {
     const text = elements.composerInput.value;
     if (!text.trim() || state.actionBusy) return;
     elements.composerSend.disabled = true;
+    elements.composerInput.disabled = true;
+    phone.setComposerText(text);
+    state.actionBusy = true;
     try {
-      await performAction({ kind: "send", text });
-      elements.composerInput.value = "";
+      const result = await phone.send();
+      state.revision = result.revision;
       showMessage(elements.composerMessage, "");
+      showConversationRefreshStatus();
     } catch (error) {
       showMessage(elements.composerMessage, error.message, true);
     } finally {
+      state.actionBusy = false;
       elements.composerSend.disabled = false;
+      elements.composerInput.disabled = false;
     }
   });
   document.addEventListener("visibilitychange", () => {
@@ -367,6 +431,7 @@ function initializePhoneWorkspace() {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     calibrationRequest,
+    createPhoneController,
     createSetupModel,
     normalizeRectangle,
     phoneUrlForStatus,

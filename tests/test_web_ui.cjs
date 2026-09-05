@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   calibrationRequest,
+  createPhoneController,
   createSetupModel,
   normalizeRectangle,
   phoneUrlForStatus,
@@ -81,4 +82,61 @@ test("swipe distance maps proportionally to bounded logical steps", () => {
 test("project expansion is local UI state", () => {
   const next = toggleProject({ SummonLab: true }, "SummonLab");
   assert.deepEqual(next, { SummonLab: false });
+});
+
+test("send clears the composer when its POST succeeds but the PNG refresh fails", async () => {
+  const controller = createPhoneController({
+    postAction: async () => ({ revision: 7 }),
+    requestImage: async () => { throw new Error("PNG unavailable"); },
+  });
+  controller.setComposerText("Please continue");
+
+  await controller.send();
+
+  assert.equal(controller.composerText, "");
+  assert.match(controller.conversationError, /could not be refreshed/);
+});
+
+test("unchanged polling does not re-request a failed image revision", async () => {
+  const requests = [];
+  const controller = createPhoneController({
+    postAction: async () => ({ revision: 3 }),
+    requestImage: async (revision) => {
+      requests.push(revision);
+      throw new Error("PNG unavailable");
+    },
+  });
+
+  await controller.refreshConversation(3);
+  await controller.refreshConversation(3);
+
+  assert.deepEqual(requests, [3]);
+});
+
+test("a successful action may re-request its conversation image revision", async () => {
+  const requests = [];
+  const controller = createPhoneController({
+    postAction: async () => ({ revision: 3 }),
+    requestImage: async (revision) => {
+      requests.push(revision);
+      throw new Error("PNG unavailable");
+    },
+  });
+
+  await controller.refreshConversation(3);
+  await controller.performAction({ kind: "scroll", amount: -1 });
+
+  assert.deepEqual(requests, [3, 3]);
+});
+
+test("gestures require a loaded revision and a natural image", async () => {
+  const controller = createPhoneController({
+    postAction: async () => ({ revision: 3 }),
+    requestImage: async () => {},
+  });
+
+  assert.equal(controller.canHandleGesture({ naturalWidth: 100 }), false);
+  await controller.refreshConversation(3);
+  assert.equal(controller.canHandleGesture({ naturalWidth: 0 }), false);
+  assert.equal(controller.canHandleGesture({ naturalWidth: 100 }), true);
 });
