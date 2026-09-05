@@ -233,6 +233,7 @@ function initializePhoneWorkspace({
   }
 
   function taskStatusIcon(state) {
+    if (state !== "busy" && state !== "done") return null;
     const [kind, label] = state === "busy" ? ["busy", "Busy"] : ["ready", "Ready"];
     const path = kind === "busy"
       ? "M12 3a9 9 0 1 0 9 9"
@@ -303,7 +304,8 @@ function initializePhoneWorkspace({
         }
         const title = documentRef.createElement("span");
         title.textContent = task.title;
-        taskMeta.append(taskStatusIcon(task.state));
+        const statusIcon = taskStatusIcon(task.state);
+        if (statusIcon) taskMeta.append(statusIcon);
         taskButton.append(title, taskMeta);
         taskButton.addEventListener("click", async () => {
           if (state.actionBusy) return;

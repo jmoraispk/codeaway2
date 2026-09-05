@@ -385,7 +385,7 @@ test("phone navigator renders accessible state and worktree icons without status
             tasks: [
               { title: "Running", state: "busy", worktree: true, selected: true },
               { title: "Finished", state: "done", worktree: false, selected: false },
-              { title: "Unclassified", state: "unknown", worktree: false, selected: false },
+              { title: "Unclassified", state: "unknown", worktree: true, selected: false },
               { title: "Waiting", state: "idle", worktree: false, selected: false },
             ],
           },
@@ -434,8 +434,9 @@ test("phone navigator renders accessible state and worktree icons without status
   assert.equal(tasks[1].children[0].textContent, "Finished");
   assert.equal(tasks[1].children[1].className, "task-meta");
   assertIcon(tasks[1].children[1].children[0], "status-icon status-icon--ready", "Ready");
-  assertIcon(tasks[2].children[1].children[0], "status-icon status-icon--ready", "Ready");
-  assertIcon(tasks[3].children[1].children[0], "status-icon status-icon--ready", "Ready");
+  assert.equal(tasks[2].children[1].children.length, 1);
+  assertIcon(tasks[2].children[1].children[0], "worktree-marker", "Worktree");
+  assert.equal(tasks[3].children[1].children.length, 0);
 });
 
 test("phone pointer and composer listeners dispatch validated actions", async () => {
