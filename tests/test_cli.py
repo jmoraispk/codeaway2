@@ -217,6 +217,41 @@ def test_cached_bind_failure_warns_falls_back_and_persists_loopback(runtime, cap
     assert runtime.config.surfaces == original.surfaces
 
 
+def test_first_run_loopback_bind_failure_is_labeled_default_not_cached(runtime, capsys):
+    runtime.bind_failures.add("127.0.0.1")
+
+    result = start(["--no-browser"], runtime, _serve=False)
+
+    error = capsys.readouterr().err
+    assert result.exit_code != 0
+    assert "Could not bind default address 127.0.0.1:8765" in error
+    assert "cached address" not in error.casefold()
+
+
+def test_explicit_ipv6_is_rejected_before_bind_or_config_mutation(runtime):
+    original = complete_config("100.64.0.10")
+    runtime.config = original
+
+    with pytest.raises(SystemExit) as raised:
+        start(["--ip", "::1"], runtime, _serve=False)
+
+    assert raised.value.code == 2
+    assert runtime.server_addresses == []
+    assert runtime.config == original
+
+
+def test_cached_ipv6_is_rejected_with_actionable_v01_message(runtime, capsys):
+    original = complete_config("::1")
+    runtime.config = original
+
+    result = start(["--no-browser"], runtime, _serve=False)
+
+    assert result.exit_code != 0
+    assert runtime.server_addresses == []
+    assert "v0.1 requires an IPv4 bind address" in capsys.readouterr().err
+    assert runtime.config == original
+
+
 def test_explicit_bind_failure_returns_nonzero_and_preserves_cache(runtime, capsys):
     original = complete_config("100.64.0.10")
     runtime.config = original

@@ -70,10 +70,10 @@ function calibrationRequest(surfaces) {
 }
 
 function phoneUrlForStatus({ bind_ip, port }) {
-  const host = bind_ip.includes(":") && !bind_ip.startsWith("[")
-    ? `[${bind_ip}]`
-    : bind_ip;
-  return `http://${host}:${port}/`;
+  if (bind_ip.includes(":")) {
+    throw new Error("CodeAway v0.1 requires an IPv4 address.");
+  }
+  return `http://${bind_ip}:${port}/`;
 }
 
 function createSetupModel(surfaces, status) {

@@ -59,10 +59,10 @@ test("setup derives the phone URL from an IPv4 status address", () => {
   );
 });
 
-test("setup brackets an IPv6 status address in the phone URL", () => {
-  assert.equal(
-    phoneUrlForStatus({ bind_ip: "fd7a:115c:a1e0::7", port: 8765 }),
-    "http://[fd7a:115c:a1e0::7]:8765/",
+test("setup rejects an impossible IPv6 status address", () => {
+  assert.throws(
+    () => phoneUrlForStatus({ bind_ip: "fd7a:115c:a1e0::7", port: 8765 }),
+    /IPv4/,
   );
 });
 

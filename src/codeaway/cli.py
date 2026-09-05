@@ -53,12 +53,27 @@ def _port(value: str) -> int:
     return port
 
 
+def _ipv4_address(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("address must be an IPv4 address") from error
+    if not isinstance(address, ipaddress.IPv4Address):
+        raise argparse.ArgumentTypeError("CodeAway v0.1 requires an IPv4 address")
+    return str(address)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="codeaway",
         description="Control a local Codex Desktop window from your phone.",
     )
-    parser.add_argument("--ip", metavar="ADDRESS", help="address to bind and cache")
+    parser.add_argument(
+        "--ip",
+        type=_ipv4_address,
+        metavar="IPV4_ADDRESS",
+        help="IPv4 address to bind and cache",
+    )
     parser.add_argument("--port", type=_port, metavar="PORT", help="port to bind and cache")
     parser.add_argument(
         "--no-browser",
@@ -97,6 +112,7 @@ def start(
     runtime = runtime or Runtime()
 
     config_path = Path(runtime.config_path_factory())
+    config_existed = config_path.exists()
     loaded = load_config(config_path)
     for warning in loaded.warnings:
         print(warning, file=sys.stderr)
@@ -125,6 +141,17 @@ def start(
 
     address = options.ip if options.ip is not None else config.bind_ip
     port = options.port if options.port is not None else config.port
+    try:
+        parsed_address = ipaddress.ip_address(address)
+    except ValueError:
+        parsed_address = None
+    if not isinstance(parsed_address, ipaddress.IPv4Address):
+        print(
+            "CodeAway v0.1 requires an IPv4 bind address; "
+            "choose one with --ip IPV4_ADDRESS.",
+            file=sys.stderr,
+        )
+        return StartResult(1, None)
     state = AppState(config, target)
     application = Application(
         state,
@@ -142,7 +169,8 @@ def start(
             _print_bind_error("explicit", address, port, error)
             return StartResult(1, None)
         if _is_loopback(address):
-            _print_bind_error("cached", address, port, error)
+            source = "cached" if config_existed else "default"
+            _print_bind_error(source, address, port, error)
             return StartResult(1, None)
         print(
             f"Cached address {address} could not be bound: {error}; "

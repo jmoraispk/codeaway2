@@ -5,7 +5,8 @@ Version 0.1 supports one pairing only: **Windows with Codex Desktop**. The
 source repository is `codeaway2`; the Python package and command are
 `codeaway`.
 
-> Status: release-ready MVP. The package is not published yet.
+> Status: MVP implementation complete; the live Windows/phone smoke test is
+> still pending. The package is not published yet.
 
 ## Run CodeAway
 
@@ -27,7 +28,7 @@ To enable phone access, restart with an address assigned to the laptop on your
 LAN or Tailscale network:
 
 ```powershell
-uvx codeaway --ip <LAN-or-Tailscale-IP>
+uvx codeaway --ip <IPv4-LAN-or-Tailscale-address>
 ```
 
 The explicit address is saved only after it binds successfully. Later
@@ -40,6 +41,8 @@ If a cached address is no longer available, CodeAway warns, falls back to
 `127.0.0.1`, and saves that fallback. An invalid explicit address exits instead
 of silently changing interfaces. Use `--no-browser` to suppress an otherwise
 necessary setup launch and `--port PORT` to select and cache another port.
+CodeAway v0.1 accepts IPv4 literals only; IPv6 addresses are rejected with an
+actionable startup error.
 
 > **Security:** A non-loopback endpoint grants full desktop mouse and keyboard
 > input control to every device that can reach it. CodeAway v0.1 has no pairing

@@ -158,7 +158,7 @@ system, or JavaScript framework.
 The command surface is intentionally small:
 
 ```text
-codeaway [--ip ADDRESS] [--port PORT] [--no-browser]
+codeaway [--ip IPV4_ADDRESS] [--port PORT] [--no-browser]
 ```
 
 The default port is `8765`. Bind selection follows this precedence:
@@ -175,10 +175,12 @@ The default port is `8765`. Bind selection follows this precedence:
 6. Passing `--ip 127.0.0.1` explicitly returns the saved configuration to
    laptop-only mode.
 
-CodeAway treats LAN and Tailscale addresses alike. A non-loopback bind prints a
-warning that every device allowed to reach that address and port receives full
-mouse and keyboard control. The MVP relies on the user's network boundary and
-includes no application pairing or authentication.
+CodeAway treats LAN and Tailscale IPv4 addresses alike. Version 0.1 rejects
+IPv6 explicitly rather than partially supporting it through an IPv4-family
+server. A non-loopback bind prints a warning that every device allowed to reach
+that address and port receives full mouse and keyboard control. The MVP relies
+on the user's network boundary and includes no application pairing or
+authentication.
 
 The service runs in the foreground and stops cleanly on `Ctrl+C`. When the
 saved target and all three calibrated surfaces are still valid, startup prints

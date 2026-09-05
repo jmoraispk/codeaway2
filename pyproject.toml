@@ -27,5 +27,18 @@ artifacts = [
   "src/codeaway/web/*.js",
 ]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.superpowers/**",
+  "/output/**",
+  "/dist/**",
+  "/uv.lock",
+  "/.pytest_cache/**",
+  "/.ruff_cache/**",
+  "/.mypy_cache/**",
+  "**/__pycache__/**",
+  "**/*.py[cod]",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
