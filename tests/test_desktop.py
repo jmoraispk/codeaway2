@@ -200,7 +200,7 @@ def test_activation_and_coordinate_input_pin_dpi_before_native_operations(
         ("click", 10, 2560, 100),
         "dpi",
         ("foreground", 10),
-        ("scroll", 10, 2560, 100, -120),
+        ("scroll", 10, 2560, 100, -240),
     ]
 
 
@@ -252,7 +252,7 @@ def test_failed_dpi_pin_stops_operations_before_the_native_boundary(
     assert calls == ["dpi"]
 
 
-def test_scroll_uses_forty_units_per_logical_step(native):
+def test_scroll_uses_eighty_units_per_logical_step(native):
     window = DesktopWindow(
         "window-10", 10, "Editor", "C:/Apps/editor.exe", PixelRegion(0, 0, 800, 600)
     )
@@ -261,7 +261,7 @@ def test_scroll_uses_forty_units_per_logical_step(native):
 
     desktop.scroll(window, PixelPoint(500, 400), -3)
 
-    assert native.wheel_calls == [(10, 500, 400, -120)]
+    assert native.wheel_calls == [(10, 500, 400, -240)]
 
 
 def test_list_windows_excludes_invisible_and_zero_area_windows(native):

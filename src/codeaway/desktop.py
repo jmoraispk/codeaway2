@@ -256,7 +256,7 @@ class WindowsDesktop:
             raise InputUnavailable("physical DPI coordinate context is unavailable")
         self._require_foreground(window)
         if not self._native.scroll(
-            window.native_handle, point.x, point.y, amount * 40
+            window.native_handle, point.x, point.y, amount * 80
         ):
             raise InputUnavailable(
                 "cursor placement or foreground validation failed"
