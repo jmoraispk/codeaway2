@@ -1,3 +1,4 @@
+import ctypes
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -131,6 +132,66 @@ def test_capture_passes_exact_bounding_box_to_native_boundary(native):
 
     assert desktop.capture(PixelRegion(12, 34, 56, 78)) == "image"
     assert native.capture_calls == [(12, 34, 68, 112)]
+
+
+def test_windows_dpi_pin_requests_per_monitor_aware_v2():
+    contexts = []
+
+    class Setter:
+        argtypes = None
+        restype = None
+
+        def __call__(self, context):
+            contexts.append(context.value)
+            return 1
+
+    pin = getattr(desktop_module, "_pin_thread_v2_dpi", None)
+
+    assert pin is not None
+    assert pin(SimpleNamespace(SetThreadDpiAwarenessContext=Setter())) is True
+    assert contexts == [ctypes.c_void_p(-4).value]
+
+
+def test_list_windows_reads_physical_rectangles_after_dpi_pin(monkeypatch, native):
+    dpi = {"physical": False}
+
+    def pin():
+        dpi["physical"] = True
+        return True
+
+    def list_windows():
+        region = (
+            PixelRegion(2560, 0, 2560, 2076)
+            if dpi["physical"]
+            else PixelRegion(1463, 0, 1463, 1186)
+        )
+        return [_NativeWindow(10, "ChatGPT", "C:/Apps/ChatGPT.exe", region, True)]
+
+    monkeypatch.setattr(desktop_module, "_pin_thread_v2_dpi", pin, raising=False)
+    monkeypatch.setattr(native, "list_windows", list_windows)
+
+    windows = WindowsDesktop(native).list_windows()
+
+    assert windows[0].region == PixelRegion(2560, 0, 2560, 2076)
+
+
+def test_capture_uses_physical_pixel_context(monkeypatch, native):
+    dpi = {"physical": False}
+
+    def pin():
+        dpi["physical"] = True
+        return True
+
+    def capture(bounding_box):
+        del bounding_box
+        return "physical" if dpi["physical"] else "virtualized"
+
+    monkeypatch.setattr(desktop_module, "_pin_thread_v2_dpi", pin, raising=False)
+    monkeypatch.setattr(native, "capture", capture)
+
+    result = WindowsDesktop(native).capture(PixelRegion(2560, 0, 2560, 2076))
+
+    assert result == "physical"
 
 
 def test_accessibility_tree_converts_native_controls_to_serializable_nodes(native, desktop_window):

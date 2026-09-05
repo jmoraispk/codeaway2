@@ -8,6 +8,24 @@ from uuid import uuid4
 from PIL import Image, ImageGrab
 
 
+def _pin_thread_v2_dpi(user32: Any | None = None) -> bool:
+    """Make Win32 rectangles and screen captures use physical pixels."""
+    import ctypes
+    import sys
+
+    if user32 is None:
+        if not sys.platform.startswith("win"):
+            return False
+        user32 = ctypes.windll.user32
+    try:
+        setter = user32.SetThreadDpiAwarenessContext
+        setter.argtypes = (ctypes.c_void_p,)
+        setter.restype = ctypes.c_void_p
+        return bool(setter(ctypes.c_void_p(-4)))  # PER_MONITOR_AWARE_V2
+    except Exception:
+        return False
+
+
 @dataclass(frozen=True)
 class PixelPoint:
     x: int
@@ -152,6 +170,7 @@ class WindowsDesktop:
         self._node_controls: dict[str, str] = {}
 
     def list_windows(self) -> list[DesktopWindow]:
+        _pin_thread_v2_dpi()
         return [
             DesktopWindow(
                 id=f"window-{uuid4().hex}",
@@ -171,6 +190,7 @@ class WindowsDesktop:
         return self._native.is_foreground(window.native_handle)
 
     def capture(self, region: PixelRegion) -> Image.Image:
+        _pin_thread_v2_dpi()
         return self._native.capture(
             (region.x, region.y, region.x + region.width, region.y + region.height)
         )
