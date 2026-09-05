@@ -492,10 +492,10 @@ class _WindowsNative:
         self._set_clipboard_text(text)
 
     def send_paste_and_submit(self, native_handle: int) -> bool:
-        if not self.is_foreground(native_handle):
-            return False
         import uiautomation as auto
 
+        if not self.is_foreground(native_handle):
+            return False
         auto.SendKeys("{Ctrl}v{Enter}")
         return True
 
