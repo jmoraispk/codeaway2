@@ -232,6 +232,39 @@ test("setup preserves current calibration without selecting another window", asy
   assert.equal(calls.some((call) => call.path === "/api/select"), false);
 });
 
+test("setup preselects the first available window without loading it", async () => {
+  const documentRef = setupDocument();
+  const calls = [];
+  const windows = [
+    {
+      agent_id: "codex", current: false, id: "first", process_path: "C:/Codex.exe",
+      surfaces: savedSurfaces, title: "First Codex",
+    },
+    {
+      agent_id: "codex", current: false, id: "second", process_path: "C:/Codex.exe",
+      surfaces: savedSurfaces, title: "Second Codex",
+    },
+  ];
+  const fetchFn = async (path, options = {}) => {
+    calls.push({ path, options });
+    if (path === "/api/status") {
+      return response({ bind_ip: "127.0.0.1", port: 8765, revision: 7 });
+    }
+    if (path === "/api/windows") return response({ windows });
+    if (path === "/api/select") return response({ revision: 8 });
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const setup = initializeSetup({ documentRef, fetchFn });
+  await setup.ready;
+
+  assert.equal(documentRef.elements["window-select"].value, "first");
+  assert.equal(documentRef.elements["load-window"].disabled, false);
+  assert.equal(documentRef.elements["screenshot-stage"].hidden, true);
+  assert.equal(documentRef.elements["window-screenshot"].src, "");
+  assert.deepEqual(calls.map((call) => call.path), ["/api/status", "/api/windows"]);
+});
+
 test("setup overlay classes do not collide with phone panel classes", async () => {
   const documentRef = setupDocument();
   const fetchFn = async (path) => {
@@ -289,8 +322,9 @@ test("setup refresh button retries discovery without reloading the page", async 
 
   assert.equal(discoveryCount, 2);
   assert.equal(documentRef.elements["refresh-windows"].hidden, true);
-  assert.equal(documentRef.elements["window-select"].value, "");
-  assert.equal(documentRef.elements["load-window"].disabled, true);
+  assert.equal(documentRef.elements["window-select"].value, "found");
+  assert.equal(documentRef.elements["load-window"].disabled, false);
+  assert.equal(documentRef.elements["screenshot-stage"].hidden, true);
 });
 
 test("phone wiring refreshes autonomous revisions and manages visibility polling", async () => {

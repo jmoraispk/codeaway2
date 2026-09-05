@@ -162,9 +162,9 @@ class CodexAgent:
     def default_surfaces(self, window: DesktopWindow) -> SurfaceMap:
         del window
         return SurfaceMap(
-            sidebar=FractionalRegion(0.0, 0.0, 0.21, 1.0),
-            conversation=FractionalRegion(0.21, 0.05, 0.79, 0.73),
-            composer=FractionalRegion(0.32, 0.78, 0.56, 0.18),
+            sidebar=FractionalRegion(0.00, 0.03, 0.21, 0.97),
+            conversation=FractionalRegion(0.21, 0.08, 0.79, 0.82),
+            composer=FractionalRegion(0.33, 0.90, 0.55, 0.06),
         )
 
     @staticmethod

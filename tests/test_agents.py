@@ -334,9 +334,9 @@ def test_codex_matching_requires_a_codex_executable(process_path, title, expecte
 
 def test_codex_default_surfaces_are_editor_starting_suggestions(codex_window):
     assert CodexAgent().default_surfaces(codex_window) == SurfaceMap(
-        sidebar=FractionalRegion(0.0, 0.0, 0.21, 1.0),
-        conversation=FractionalRegion(0.21, 0.05, 0.79, 0.73),
-        composer=FractionalRegion(0.32, 0.78, 0.56, 0.18),
+        sidebar=FractionalRegion(0.0, 0.03, 0.21, 0.97),
+        conversation=FractionalRegion(0.21, 0.08, 0.79, 0.82),
+        composer=FractionalRegion(0.33, 0.90, 0.55, 0.06),
     )
 
 
@@ -345,7 +345,7 @@ def test_codex_inspect_builds_sorted_projects_and_tasks_from_generic_inputs(
 ):
     sidebar = Image.new("RGB", (300, 140), "#101010")
     for x in range(274, 282):
-        for y in range(52, 60):
+        for y in range(20, 28):
             sidebar.putpixel((x, y), (45, 120, 245))
     desktop = NavigatorDesktop(navigator_nodes, sidebar)
     target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))

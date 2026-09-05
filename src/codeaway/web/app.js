@@ -600,8 +600,9 @@ function initializeSetup({ documentRef = document, fetchFn = fetch } = {}) {
         await loadScreenshot(state.status.revision);
         showMessage("Current calibration loaded. Select another window and choose Load window only to change targets.");
       } else {
-        elements.windowSelect.value = "";
-        showMessage("Choose a window, then select Load window.");
+        elements.windowSelect.value = state.windows[0].id;
+        elements.loadWindow.disabled = false;
+        showMessage("Select Load window to begin calibration.");
       }
     } catch (error) {
       showMessage(error.message, true);
