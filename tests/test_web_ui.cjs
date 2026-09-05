@@ -165,3 +165,20 @@ test("a stale poll cannot override a newer action image request", async () => {
   assert.equal(controller.imageRevision, 4);
   assert.equal(controller.conversationError, "");
 });
+
+test("a delayed older action cannot override an already requested poll image", async () => {
+  const requests = [];
+  let completeAction;
+  const controller = createPhoneController({
+    postAction: () => new Promise((resolve) => { completeAction = resolve; }),
+    requestImage: async (revision) => { requests.push(revision); },
+  });
+
+  await controller.refreshConversation(5);
+  const action = controller.performAction({ kind: "scroll", amount: -1 });
+  completeAction({ revision: 4 });
+  await action;
+
+  assert.deepEqual(requests, [5]);
+  assert.equal(controller.imageRevision, 5);
+});

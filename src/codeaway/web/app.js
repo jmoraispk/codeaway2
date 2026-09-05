@@ -113,9 +113,11 @@ function createPhoneController({ postAction, requestImage, onComposerClear = () 
     },
     async refreshConversation(revision, successfulAction = false) {
       if (
-        !successfulAction
-        && state.requestedImageRevision !== null
-        && revision <= state.requestedImageRevision
+        state.requestedImageRevision !== null
+        && (
+          revision < state.requestedImageRevision
+          || (!successfulAction && revision === state.requestedImageRevision)
+        )
       ) return false;
       state.requestedImageRevision = revision;
       state.imageRevision = null;
