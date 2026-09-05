@@ -150,10 +150,12 @@ class _ProjectRow:
 class CodexAgent:
     id = "codex"
 
-    _PROJECT_CLASS = "group/folder-row sidebar-item"
-    _TASK_CLASS = "sidebar-item py-row-y"
-    _WORKTREE_CLASS = "icon-2xs text-codex-description no-drag shrink-0"
-    _BUSY_CLASS = "icon-xs shrink-0"
+    _PROJECT_CLASS_TOKENS = frozenset({"group/folder-row", "sidebar-item"})
+    _TASK_CLASS_TOKENS = frozenset({"sidebar-item", "py-row-y"})
+    _WORKTREE_CLASS_TOKENS = frozenset(
+        {"icon-2xs", "text-codex-description", "no-drag", "shrink-0"}
+    )
+    _BUSY_CLASS_TOKENS = frozenset({"icon-xs", "shrink-0"})
 
     def matches(self, window: DesktopWindow) -> bool:
         path = window.process_path.replace("/", "\\").casefold()
@@ -187,6 +189,10 @@ class CodexAgent:
             and second.region.x < first.region.x + first.region.width
         )
 
+    @staticmethod
+    def _has_class_tokens(class_name: str, required_tokens: frozenset[str]) -> bool:
+        return required_tokens.issubset(class_name.split())
+
     def _project_identity(
         self, project: AccessibilityNode, nodes: list[AccessibilityNode]
     ) -> tuple[str, str | None]:
@@ -212,15 +218,21 @@ class CodexAgent:
 
     def _rows(self, nodes: list[AccessibilityNode]) -> tuple[_ProjectRow, ...]:
         projects = sorted(
-            (node for node in nodes if self._PROJECT_CLASS in node.class_name),
+            (
+                node
+                for node in nodes
+                if self._has_class_tokens(node.class_name, self._PROJECT_CLASS_TOKENS)
+            ),
             key=self._position,
         )
         tasks = sorted(
             (
                 node
                 for node in nodes
-                if self._TASK_CLASS in node.class_name
-                and self._PROJECT_CLASS not in node.class_name
+                if self._has_class_tokens(node.class_name, self._TASK_CLASS_TOKENS)
+                and not self._has_class_tokens(
+                    node.class_name, self._PROJECT_CLASS_TOKENS
+                )
                 and node.name not in {"Pin chat", "Archive chat"}
             ),
             key=self._position,
@@ -242,10 +254,10 @@ class CodexAgent:
         self,
         task: AccessibilityNode,
         nodes: list[AccessibilityNode],
-        class_name: str,
+        required_tokens: frozenset[str],
     ) -> bool:
         return any(
-            class_name in node.class_name
+            self._has_class_tokens(node.class_name, required_tokens)
             and self._same_row(task, node)
             and self._overlaps_horizontally(task, node)
             for node in nodes
@@ -291,7 +303,7 @@ class CodexAgent:
         for row in self._rows(nodes):
             tasks: list[TaskSnapshot] = []
             for task in row.tasks:
-                busy = self._has_class_on_row(task, nodes, self._BUSY_CLASS)
+                busy = self._has_class_on_row(task, nodes, self._BUSY_CLASS_TOKENS)
                 state: Literal["done", "busy", "idle", "unknown"]
                 if self._is_done(task, sidebar_region, sidebar_image):
                     state = "done"
@@ -303,7 +315,9 @@ class CodexAgent:
                     TaskSnapshot(
                         title=task.name,
                         state=state,
-                        worktree=self._has_class_on_row(task, nodes, self._WORKTREE_CLASS),
+                        worktree=self._has_class_on_row(
+                            task, nodes, self._WORKTREE_CLASS_TOKENS
+                        ),
                         selected="bg-primary-ghost-hover" in task.class_name,
                     )
                 )

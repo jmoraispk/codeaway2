@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 from PIL import Image
@@ -364,6 +364,46 @@ def test_codex_inspect_builds_sorted_projects_and_tasks_from_generic_inputs(
         ),
     )
     assert desktop.capture_regions == [target.surfaces.sidebar.resolve(codex_window.region)]
+
+
+def test_codex_inspect_accepts_interleaved_live_class_tokens(
+    codex_window, navigator_nodes
+):
+    class_names = {
+        "project": "sidebar-item px-1 group/folder-row flex",
+        "finished": "py-row-y rounded sidebar-item bg-primary-ghost-hover",
+        "worktree": "text-codex-description icon-2xs size-4 no-drag shrink-0",
+        "pin": "py-row-y toolbar-button sidebar-item",
+        "running": "py-row-y rounded sidebar-item",
+        "running-marker": "shrink-0 animate-spin icon-xs",
+        "archive": "py-row-y toolbar-button sidebar-item",
+    }
+    nodes = tuple(
+        replace(node, class_name=class_names.get(node.id, node.class_name))
+        for node in navigator_nodes
+    )
+    sidebar = Image.new("RGB", (300, 140), "#101010")
+    for x in range(274, 282):
+        for y in range(20, 28):
+            sidebar.putpixel((x, y), (45, 120, 245))
+    desktop = NavigatorDesktop(nodes, sidebar)
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert snapshot.projects == (
+        ProjectSnapshot(
+            name="SummonLab",
+            host="private_3",
+            connected=True,
+            state="connected",
+            expanded=True,
+            tasks=(
+                TaskSnapshot("Finished task", "done", worktree=True, selected=True),
+                TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+            ),
+        ),
+    )
 
 
 def test_codex_inspect_never_captures_or_assumes_idle_when_not_foreground(
