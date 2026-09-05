@@ -180,15 +180,15 @@ class ActionDesktop:
     def accessibility_action(self, node, action):
         self.calls.append(("accessibility_action", node, action))
 
-    def click(self, point):
+    def click(self, window, point):
         self.last_click = point
-        self.calls.append(("click", point))
+        self.calls.append(("click", window, point))
 
-    def scroll(self, point, amount):
-        self.calls.append(("scroll", point, amount))
+    def scroll(self, window, point, amount):
+        self.calls.append(("scroll", window, point, amount))
 
-    def paste_and_submit(self, point, text):
-        self.calls.append(("paste_and_submit", point, text))
+    def paste_and_submit(self, window, point, text):
+        self.calls.append(("paste_and_submit", window, point, text))
 
 
 @pytest.fixture
@@ -601,10 +601,29 @@ def test_conversation_click_preserves_proportional_coordinates(
     assert fake_desktop.last_click == PixelPoint(550, 461)
 
 
+def test_conversation_click_at_fractional_edge_stays_inside_surface(
+    fake_desktop, codex_target
+):
+    CodexAgent().click(
+        fake_desktop, codex_target, ClickAction("conversation", 1, 1)
+    )
+
+    surface = codex_target.surfaces.conversation.resolve(codex_target.window.region)
+    assert fake_desktop.last_click == PixelPoint(
+        surface.x + surface.width - 1,
+        surface.y + surface.height - 1,
+    )
+
+
 def test_scroll_uses_calibrated_conversation_center(fake_desktop, codex_target):
     CodexAgent().scroll(fake_desktop, codex_target, -4)
 
-    assert fake_desktop.calls[-1] == ("scroll", PixelPoint(700, 347), -4)
+    assert fake_desktop.calls[-1] == (
+        "scroll",
+        codex_target.window,
+        PixelPoint(700, 347),
+        -4,
+    )
 
 
 def test_send_uses_calibrated_composer_center(fake_desktop, codex_target):
@@ -612,6 +631,7 @@ def test_send_uses_calibrated_composer_center(fake_desktop, codex_target):
 
     assert fake_desktop.calls[-1] == (
         "paste_and_submit",
+        codex_target.window,
         PixelPoint(700, 659),
         "hello",
     )

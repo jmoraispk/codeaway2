@@ -84,6 +84,10 @@ class AccessibilityNode:
     actions: frozenset[AccessibilityAction] = frozenset()
 
 
+class InputUnavailable(RuntimeError):
+    """Global input was aborted because its exact target was not safe."""
+
+
 class DesktopBackend(Protocol):
     id: str
 
@@ -101,11 +105,15 @@ class DesktopBackend(Protocol):
         self, node: AccessibilityNode, action: AccessibilityAction
     ) -> None: ...
 
-    def click(self, point: PixelPoint) -> None: ...
+    def click(self, window: DesktopWindow, point: PixelPoint) -> None: ...
 
-    def scroll(self, point: PixelPoint, amount: int) -> None: ...
+    def scroll(
+        self, window: DesktopWindow, point: PixelPoint, amount: int
+    ) -> None: ...
 
-    def paste_and_submit(self, point: PixelPoint, text: str) -> None: ...
+    def paste_and_submit(
+        self, window: DesktopWindow, point: PixelPoint, text: str
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -194,14 +202,36 @@ class WindowsDesktop:
             raise ValueError("accessibility node is not from the latest tree read")
         self._native.accessibility_action(control_id, action)
 
-    def click(self, point: PixelPoint) -> None:
-        self._native.click(point.x, point.y)
+    def _require_foreground(self, window: DesktopWindow) -> None:
+        if not self._native.is_foreground(window.native_handle):
+            raise InputUnavailable("the exact target window is not foreground")
 
-    def scroll(self, point: PixelPoint, amount: int) -> None:
-        self._native.scroll(point.x, point.y, amount * 40)
+    def click(self, window: DesktopWindow, point: PixelPoint) -> None:
+        self._require_foreground(window)
+        if not self._native.click(window.native_handle, point.x, point.y):
+            raise InputUnavailable(
+                "cursor placement or foreground validation failed"
+            )
 
-    def paste_and_submit(self, point: PixelPoint, text: str) -> None:
-        self._native.paste_and_submit(point.x, point.y, text)
+    def scroll(
+        self, window: DesktopWindow, point: PixelPoint, amount: int
+    ) -> None:
+        self._require_foreground(window)
+        if not self._native.scroll(
+            window.native_handle, point.x, point.y, amount * 40
+        ):
+            raise InputUnavailable(
+                "cursor placement or foreground validation failed"
+            )
+
+    def paste_and_submit(
+        self, window: DesktopWindow, point: PixelPoint, text: str
+    ) -> None:
+        self.click(window, point)
+        self._native.set_clipboard_text(text)
+        self._require_foreground(window)
+        if not self._native.send_paste_and_submit(window.native_handle):
+            raise InputUnavailable("the exact target window is not foreground")
 
 
 class _WindowsNative:
@@ -427,27 +457,35 @@ class _WindowsNative:
         }[action]
         getattr(pattern, method_name)()
 
-    def click(self, x: int, y: int) -> None:
+    def click(self, native_handle: int, x: int, y: int) -> bool:
         import ctypes
 
         user32 = ctypes.windll.user32
-        user32.SetCursorPos(x, y)
+        if not user32.SetCursorPos(x, y) or not self.is_foreground(native_handle):
+            return False
         user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
         user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+        return True
 
-    def scroll(self, x: int, y: int, wheel_data: int) -> None:
+    def scroll(self, native_handle: int, x: int, y: int, wheel_data: int) -> bool:
         import ctypes
 
         user32 = ctypes.windll.user32
-        user32.SetCursorPos(x, y)
+        if not user32.SetCursorPos(x, y) or not self.is_foreground(native_handle):
+            return False
         user32.mouse_event(0x0800, 0, 0, wheel_data, 0)  # MOUSEEVENTF_WHEEL
+        return True
 
-    def paste_and_submit(self, x: int, y: int, text: str) -> None:
-        self.click(x, y)
+    def set_clipboard_text(self, text: str) -> None:
         self._set_clipboard_text(text)
+
+    def send_paste_and_submit(self, native_handle: int) -> bool:
+        if not self.is_foreground(native_handle):
+            return False
         import uiautomation as auto
 
         auto.SendKeys("{Ctrl}v{Enter}")
+        return True
 
     @staticmethod
     def _set_clipboard_text(text: str) -> None:

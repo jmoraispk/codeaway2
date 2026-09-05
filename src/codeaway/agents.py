@@ -1,3 +1,4 @@
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -377,14 +378,16 @@ class CodexAgent:
     ) -> None:
         self._activate(desktop, target)
         surface = getattr(target.surfaces, action.surface).resolve(target.window.region)
+        if surface.width <= 0 or surface.height <= 0:
+            raise TargetUnavailable("the calibrated surface has no usable pixels")
         point = PixelPoint(
-            surface.x + round(surface.width * action.x),
-            surface.y + round(surface.height * action.y),
+            surface.x + min(surface.width - 1, math.floor(surface.width * action.x)),
+            surface.y + min(surface.height - 1, math.floor(surface.height * action.y)),
         )
         if action.surface == "sidebar" and surface.x + surface.width - point.x <= 64:
             offset = max(24, round(target.window.region.width * 0.025))
-            point = PixelPoint(point.x - offset, point.y)
-        desktop.click(point)
+            point = PixelPoint(max(surface.x, point.x - offset), point.y)
+        desktop.click(target.window, point)
 
     def scroll(
         self,
@@ -394,7 +397,7 @@ class CodexAgent:
     ) -> None:
         self._activate(desktop, target)
         conversation = target.surfaces.conversation.resolve(target.window.region)
-        desktop.scroll(conversation.center, amount)
+        desktop.scroll(target.window, conversation.center, amount)
 
     def send(
         self,
@@ -404,4 +407,4 @@ class CodexAgent:
     ) -> None:
         self._activate(desktop, target)
         composer = target.surfaces.composer.resolve(target.window.region)
-        desktop.paste_and_submit(composer.center, text)
+        desktop.paste_and_submit(target.window, composer.center, text)

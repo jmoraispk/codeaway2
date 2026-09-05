@@ -23,7 +23,7 @@ from .agents import (
     TargetUnavailable,
 )
 from .config import AppConfig, _parse_config, save_config
-from .desktop import DesktopBackend, FractionalRegion
+from .desktop import DesktopBackend, FractionalRegion, InputUnavailable
 
 
 _MAX_JSON_BODY = 65_536
@@ -284,6 +284,10 @@ class Application:
         )
 
     def _select(self, value: dict[str, Any]) -> Response:
+        with self.state.action_lock:
+            return self._select_locked(value)
+
+    def _select_locked(self, value: dict[str, Any]) -> Response:
         window_id = value.get("window_id")
         if not isinstance(window_id, str):
             return self._error(400, "invalid_request", "window_id must be a string.")
@@ -330,6 +334,10 @@ class Application:
         return Response(200, "image/png", output.getvalue(), {"Cache-Control": "no-store"})
 
     def _navigator(self) -> Response:
+        with self.state.action_lock:
+            return self._navigator_locked()
+
+    def _navigator_locked(self) -> Response:
         target = self._current_target()
         if target is None:
             return self._error(409, "target_unavailable", "Selected window is unavailable.")
@@ -343,6 +351,10 @@ class Application:
         return self._json_response(200, asdict(snapshot))
 
     def _calibration(self, value: dict[str, Any]) -> Response:
+        with self.state.action_lock:
+            return self._calibration_locked(value)
+
+    def _calibration_locked(self, value: dict[str, Any]) -> Response:
         surfaces = value.get("surfaces")
         if not isinstance(surfaces, dict) or set(surfaces) != {
             "sidebar",
@@ -403,8 +415,13 @@ class Application:
         kind = value.get("kind")
         if kind == "scroll":
             amount = value.get("amount")
-            if isinstance(amount, bool) or not isinstance(amount, int):
-                raise ValueError("amount must be an integer")
+            if (
+                isinstance(amount, bool)
+                or not isinstance(amount, int)
+                or amount == 0
+                or not -12 <= amount <= 12
+            ):
+                raise ValueError("amount must be a nonzero integer between -12 and 12")
             backend.scroll(self.desktop, target, amount)
             return
         if kind == "send":
@@ -458,7 +475,7 @@ class Application:
                 self._perform_action(backend, target, value)
             except ValueError as error:
                 return self._error(400, "invalid_action", str(error))
-            except TargetUnavailable:
+            except (InputUnavailable, TargetUnavailable):
                 return self._error(409, "target_unavailable", "Selected window is unavailable.")
             with self.state.state_lock:
                 self.state.revision += 1

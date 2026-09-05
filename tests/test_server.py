@@ -548,6 +548,20 @@ def test_click_dispatches_validated_fractional_coordinates(app):
     assert app.fake_agent.calls == [("click", ClickAction("conversation", 0.25, 0.75))]
 
 
+@pytest.mark.parametrize("amount", [0, -13, 13])
+def test_scroll_rejects_zero_or_out_of_range_amounts(app, amount):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        json.dumps({"kind": "scroll", "amount": amount}).encode(),
+    )
+
+    assert response.status == 400
+    assert payload(response)["error"]["code"] == "invalid_action"
+    assert app.fake_agent.calls == []
+
+
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
@@ -577,31 +591,120 @@ def test_navigator_serializes_agent_snapshot(app):
     ]
 
 
-def test_concurrent_same_target_reads_both_succeed(app):
-    readers_ready = threading.Barrier(3)
+def test_concurrent_navigator_reads_are_serialized(app):
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    inspection_lock = threading.Lock()
+    active_inspections = 0
+    overlap = False
     results = [None, None]
+    original_inspect = app.fake_agent.inspect
 
-    def synchronized_list_windows():
-        readers_ready.wait(2)
-        return list(app.fake_desktop.windows)
+    def blocked_inspect(desktop, target):
+        nonlocal active_inspections, overlap
+        with inspection_lock:
+            active_inspections += 1
+            overlap = overlap or active_inspections > 1
+            first = not first_entered.is_set()
+            if first:
+                first_entered.set()
+        try:
+            if first:
+                assert release_first.wait(2)
+            return original_inspect(desktop, target)
+        finally:
+            with inspection_lock:
+                active_inspections -= 1
 
     def read_navigator(index):
         results[index] = app.dispatch("GET", "/api/navigator", {}, b"")
 
-    app.fake_desktop.list_windows = synchronized_list_windows
+    app.fake_agent.inspect = blocked_inspect
     threads = [
         threading.Thread(target=read_navigator, args=(index,)) for index in range(2)
     ]
-    for thread in threads:
-        thread.start()
+    threads[0].start()
     try:
-        readers_ready.wait(2)
+        assert first_entered.wait(2)
+        threads[1].start()
+        threads[1].join(0.1)
+        assert threads[1].is_alive()
     finally:
+        release_first.set()
         for thread in threads:
             thread.join(2)
 
     assert all(not thread.is_alive() for thread in threads)
     assert [response.status for response in results] == [200, 200]
+    assert overlap is False
+
+
+@pytest.mark.parametrize("sensitive_route", ["navigator", "select", "calibration"])
+def test_target_sensitive_routes_wait_for_an_active_action(app, sensitive_route):
+    windows = payload(app.dispatch("GET", "/api/windows", {}, b""))["windows"]
+    action_entered = threading.Event()
+    release_action = threading.Event()
+    sensitive_started = threading.Event()
+    sensitive_finished = threading.Event()
+    results = {}
+
+    def blocked_scroll(desktop, target, amount):
+        del desktop, target, amount
+        action_entered.set()
+        assert release_action.wait(2)
+
+    def run_action():
+        results["action"] = app.dispatch(
+            "POST", "/api/action", json_headers(), b'{"kind":"scroll","amount":-2}'
+        )
+
+    requests = {
+        "navigator": ("GET", "/api/navigator", {}, b""),
+        "select": (
+            "POST",
+            "/api/select",
+            json_headers(),
+            json.dumps({"window_id": windows[0]["id"]}).encode(),
+        ),
+        "calibration": (
+            "PUT",
+            "/api/calibration",
+            json_headers(),
+            json.dumps(
+                {
+                    "surfaces": {
+                        "sidebar": [0, 0, 0.2, 1],
+                        "conversation": [0.2, 0, 0.8, 0.8],
+                        "composer": [0.3, 0.8, 0.6, 0.2],
+                    }
+                }
+            ).encode(),
+        ),
+    }
+
+    def run_sensitive():
+        sensitive_started.set()
+        results["sensitive"] = app.dispatch(*requests[sensitive_route])
+        sensitive_finished.set()
+
+    app.fake_agent.scroll = blocked_scroll
+    action_thread = threading.Thread(target=run_action)
+    sensitive_thread = threading.Thread(target=run_sensitive)
+    action_thread.start()
+    try:
+        assert action_entered.wait(2)
+        sensitive_thread.start()
+        assert sensitive_started.wait(2)
+        assert not sensitive_finished.wait(0.1)
+    finally:
+        release_action.set()
+        action_thread.join(2)
+        sensitive_thread.join(2)
+
+    assert not action_thread.is_alive()
+    assert not sensitive_thread.is_alive()
+    assert results["action"].status == 200
+    assert results["sensitive"].status == 200
 
 
 def test_target_resolution_does_not_overwrite_a_concurrent_selection(app):

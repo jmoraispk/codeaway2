@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,10 +23,13 @@ class FakeWindowsNative:
     controls: list[_NativeControl] = field(default_factory=list)
     activate_result: bool = True
     foreground_handle: int | None = None
+    foreground_results: list[bool] = field(default_factory=list)
+    click_result: bool = True
     input_calls: list[tuple[object, ...]] = field(default_factory=list)
     wheel_calls: list[tuple[int, int, int]] = field(default_factory=list)
     capture_calls: list[tuple[int, int, int, int]] = field(default_factory=list)
     action_calls: list[tuple[str, AccessibilityAction]] = field(default_factory=list)
+    clipboard_values: list[str] = field(default_factory=list)
 
     def list_windows(self):
         return self.windows
@@ -35,6 +39,8 @@ class FakeWindowsNative:
         return self.activate_result
 
     def is_foreground(self, native_handle):
+        if self.foreground_results:
+            return self.foreground_results.pop(0)
         return self.foreground_handle == native_handle
 
     def capture(self, bounding_box):
@@ -48,14 +54,20 @@ class FakeWindowsNative:
     def accessibility_action(self, control_id, action):
         self.action_calls.append((control_id, action))
 
-    def click(self, x, y):
-        self.input_calls.append(("click", x, y))
+    def click(self, native_handle, x, y):
+        self.input_calls.append(("click", native_handle, x, y))
+        return self.click_result
 
-    def scroll(self, x, y, wheel_data):
-        self.wheel_calls.append((x, y, wheel_data))
+    def scroll(self, native_handle, x, y, wheel_data):
+        self.wheel_calls.append((native_handle, x, y, wheel_data))
+        return True
 
-    def paste_and_submit(self, x, y, text):
-        self.input_calls.append(("paste_and_submit", x, y, text))
+    def set_clipboard_text(self, text):
+        self.clipboard_values.append(text)
+
+    def send_paste_and_submit(self, native_handle):
+        self.input_calls.append(("send_paste_and_submit", native_handle))
+        return True
 
 
 @pytest.fixture
@@ -85,11 +97,15 @@ def test_input_stops_when_exact_window_cannot_be_activated(native, desktop_windo
 
 
 def test_scroll_uses_forty_units_per_logical_step(native):
+    window = DesktopWindow(
+        "window-10", 10, "Editor", "C:/Apps/editor.exe", PixelRegion(0, 0, 800, 600)
+    )
+    native.foreground_handle = 10
     desktop = WindowsDesktop(native)
 
-    desktop.scroll(PixelPoint(500, 400), -3)
+    desktop.scroll(window, PixelPoint(500, 400), -3)
 
-    assert native.wheel_calls == [(500, 400, -120)]
+    assert native.wheel_calls == [(10, 500, 400, -120)]
 
 
 def test_list_windows_excludes_invisible_and_zero_area_windows(native):
@@ -163,16 +179,61 @@ def test_accessibility_action_dispatches_requested_pattern(native, desktop_windo
     assert native.action_calls == [("toggle-1", AccessibilityAction.EXPAND)]
 
 
-def test_click_and_paste_submit_use_only_the_native_boundary(native):
+def test_click_and_paste_submit_recheck_the_target_at_each_input_boundary(
+    native, desktop_window
+):
+    native.foreground_handle = desktop_window.native_handle
     desktop = WindowsDesktop(native)
 
-    desktop.click(PixelPoint(11, 12))
-    desktop.paste_and_submit(PixelPoint(13, 14), "hello")
+    desktop.click(desktop_window, PixelPoint(11, 12))
+    desktop.paste_and_submit(desktop_window, PixelPoint(13, 14), "hello")
 
     assert native.input_calls == [
-        ("click", 11, 12),
-        ("paste_and_submit", 13, 14, "hello"),
+        ("click", 10, 11, 12),
+        ("click", 10, 13, 14),
+        ("send_paste_and_submit", 10),
     ]
+    assert native.clipboard_values == ["hello"]
+
+
+def test_focus_loss_after_composer_click_prevents_keyboard_injection(
+    native, desktop_window
+):
+    native.foreground_results = [True, False]
+    desktop = WindowsDesktop(native)
+
+    with pytest.raises(RuntimeError, match="foreground"):
+        desktop.paste_and_submit(desktop_window, PixelPoint(13, 14), "hello")
+
+    assert native.input_calls == [("click", 10, 13, 14)]
+    assert native.clipboard_values == ["hello"]
+
+
+def test_cursor_placement_failure_aborts_the_click(native, desktop_window):
+    native.foreground_handle = desktop_window.native_handle
+    native.click_result = False
+    desktop = WindowsDesktop(native)
+
+    with pytest.raises(RuntimeError, match="cursor"):
+        desktop.click(desktop_window, PixelPoint(11, 12))
+
+    assert native.input_calls == [("click", 10, 11, 12)]
+
+
+def test_native_cursor_placement_failure_emits_no_mouse_event(monkeypatch):
+    mouse_events = []
+    user32 = SimpleNamespace(
+        SetCursorPos=lambda x, y: 0,
+        mouse_event=lambda *values: mouse_events.append(values),
+    )
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    native = _WindowsNative()
+    monkeypatch.setattr(native, "is_foreground", lambda native_handle: True)
+
+    assert native.click(10, 11, 12) is False
+    assert mouse_events == []
 
 
 def test_native_capabilities_read_expand_collapse_pattern_state():
