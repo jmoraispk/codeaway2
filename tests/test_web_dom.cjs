@@ -365,6 +365,62 @@ test("phone wiring refreshes autonomous revisions and manages visibility polling
   assert.equal(windowRef.intervals.size, 1);
 });
 
+test("phone navigator renders accessible state and worktree icons without status words", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const fetchFn = async (path) => {
+    if (path === "/api/status") {
+      return response({
+        ready: true,
+        revision: 0,
+        target: { agent_id: "codex", title: "Agent Window" },
+      });
+    }
+    if (path === "/api/navigator") {
+      return response({
+        available: true,
+        projects: [
+          {
+            name: "Alpha", connected: true, expanded: true, host: null, state: "connected",
+            tasks: [
+              { title: "Running", state: "busy", worktree: true, selected: true },
+              { title: "Finished", state: "done", worktree: false, selected: false },
+              { title: "Unclassified", state: "unknown", worktree: false, selected: false },
+              { title: "Waiting", state: "idle", worktree: false, selected: false },
+            ],
+          },
+          { name: "Beta", connected: false, expanded: false, host: null, state: "busy", tasks: [] },
+          { name: "Gamma", connected: false, expanded: false, host: null, state: "idle", tasks: [] },
+        ],
+      });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+  const assertIcon = (icon, className, label) => {
+    assert.equal(icon.attributes.class, className);
+    assert.equal(icon.attributes["aria-label"], label);
+    assert.equal(icon.attributes.title, label);
+    assert.equal(icon.textContent, "");
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+
+  const projects = documentRef.elements["navigator-projects"].children;
+  assert.equal(projects.length, 3);
+  assertIcon(projects[0].children[0].children[2], "status-icon status-icon--connected", "Connected");
+  assertIcon(projects[1].children[0].children[2], "status-icon status-icon--busy", "Busy");
+  assertIcon(projects[2].children[0].children[2], "status-icon status-icon--idle", "Idle");
+
+  const tasks = projects[0].children[1].children;
+  assert.equal(tasks[0].classList.contains("selected"), true);
+  assertIcon(tasks[0].children[0], "worktree-marker", "Worktree");
+  assertIcon(tasks[0].children[2], "status-icon status-icon--busy", "Busy");
+  assertIcon(tasks[1].children[1], "status-icon status-icon--ready", "Ready");
+  assertIcon(tasks[2].children[1], "status-icon status-icon--ready", "Ready");
+  assertIcon(tasks[3].children[1], "status-icon status-icon--ready", "Ready");
+});
+
 test("phone pointer and composer listeners dispatch validated actions", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();

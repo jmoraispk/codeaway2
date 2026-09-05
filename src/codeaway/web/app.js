@@ -198,13 +198,19 @@ function initializePhoneWorkspace({
     };
   }
 
-  function svgIcon(className, path) {
+  function svgIcon(className, path, label = null) {
     const svg = documentRef.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("class", className);
     svg.setAttribute("viewBox", "0 0 24 24");
     svg.setAttribute("width", "16");
     svg.setAttribute("height", "16");
-    svg.setAttribute("aria-hidden", "true");
+    if (label) {
+      svg.setAttribute("aria-label", label);
+      svg.setAttribute("role", "img");
+      svg.setAttribute("title", label);
+    } else {
+      svg.setAttribute("aria-hidden", "true");
+    }
     const shape = documentRef.createElementNS("http://www.w3.org/2000/svg", "path");
     shape.setAttribute("d", path);
     shape.setAttribute("fill", "none");
@@ -214,6 +220,27 @@ function initializePhoneWorkspace({
     shape.setAttribute("stroke-linejoin", "round");
     svg.append(shape);
     return svg;
+  }
+
+  function projectStatusIcon(state) {
+    const statuses = {
+      busy: ["busy", "Busy"],
+      connected: ["connected", "Connected"],
+      idle: ["idle", "Idle"],
+    };
+    const [kind, label] = statuses[state] || statuses.idle;
+    const path = kind === "busy"
+      ? "M12 3a9 9 0 1 0 9 9"
+      : "M12 5.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13";
+    return svgIcon(`status-icon status-icon--${kind}`, path, label);
+  }
+
+  function taskStatusIcon(state) {
+    const [kind, label] = state === "busy" ? ["busy", "Busy"] : ["ready", "Ready"];
+    const path = kind === "busy"
+      ? "M12 3a9 9 0 1 0 9 9"
+      : "M12 5.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13";
+    return svgIcon(`status-icon status-icon--${kind}`, path, label);
   }
 
   function renderStatus(status) {
@@ -247,10 +274,7 @@ function initializePhoneWorkspace({
       const name = documentRef.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;
-      const projectState = documentRef.createElement("span");
-      projectState.className = "project-state";
-      projectState.textContent = project.state;
-      toggle.append(chevron, name, projectState);
+      toggle.append(chevron, name, projectStatusIcon(project.state));
       toggle.addEventListener("click", () => {
         state.expanded = toggleProject(state.expanded, project.name);
         renderNavigator(state.navigator);
@@ -266,14 +290,15 @@ function initializePhoneWorkspace({
         taskButton.type = "button";
         taskButton.classList.toggle("selected", task.selected);
         if (task.worktree) {
-          taskButton.append(svgIcon("worktree-marker", "M7 4v9a3 3 0 0 0 3 3h1m-1-12 4 4m-4-4-4 4m8 8 4 4m-4-4-4 4"));
+          taskButton.append(svgIcon(
+            "worktree-marker",
+            "M12 4v6m0 0-6 6m6-6 6 6M12 4a2 2 0 1 0 0 .01M6 18a2 2 0 1 0 0 .01M18 18a2 2 0 1 0 0 .01",
+            "Worktree",
+          ));
         }
         const title = documentRef.createElement("span");
         title.textContent = task.title;
-        const taskState = documentRef.createElement("span");
-        taskState.className = "task-state";
-        taskState.textContent = task.state;
-        taskButton.append(title, taskState);
+        taskButton.append(title, taskStatusIcon(task.state));
         taskButton.addEventListener("click", async () => {
           if (state.actionBusy) return;
           try {
