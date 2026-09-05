@@ -482,18 +482,96 @@ def test_native_activation_rejects_a_different_foreground_window(monkeypatch):
     assert _WindowsNative().activate(10) is False
 
 
-def test_native_send_pastes_then_submits_once(monkeypatch):
-    keys = []
-    native = _WindowsNative()
+def _capture_send_input(monkeypatch, results):
+    class MouseInput(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.c_long),
+            ("dy", ctypes.c_long),
+            ("mouseData", ctypes.c_ulong),
+            ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class KeyboardInput(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_ushort),
+            ("wScan", ctypes.c_ushort),
+            ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class InputUnion(ctypes.Union):
+        _fields_ = [("mi", MouseInput), ("ki", KeyboardInput)]
+
+    class Input(ctypes.Structure):
+        _anonymous_ = ("input",)
+        _fields_ = [("type", ctypes.c_ulong), ("input", InputUnion)]
+
+    batches = []
+
+    def send_input(count, inputs, size):
+        assert size == ctypes.sizeof(Input)
+        raw = ctypes.string_at(ctypes.addressof(inputs), count * size)
+        batches.append(
+            [
+                (
+                    item.type,
+                    item.ki.wVk,
+                    item.ki.dwFlags,
+                )
+                for item in (
+                    Input.from_buffer_copy(raw, offset * size)
+                    for offset in range(count)
+                )
+            ]
+        )
+        return results.pop(0)
+
+    user32 = SimpleNamespace(SendInput=Win32Function(send_input))
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
     monkeypatch.setitem(
         __import__("sys").modules,
         "uiautomation",
-        SimpleNamespace(SendKeys=lambda value: keys.append(value)),
+        SimpleNamespace(SendKeys=lambda _: None),
     )
-    monkeypatch.setattr(native, "is_foreground", lambda native_handle: native_handle == 10)
+    return batches
+
+
+def test_native_send_input_pastes_then_submits_once(monkeypatch):
+    batches = _capture_send_input(monkeypatch, [4, 2])
+    native = _WindowsNative()
+    foreground = iter([True, True])
+    monkeypatch.setattr(native, "is_foreground", lambda _: next(foreground))
 
     assert native.send_paste_and_submit(10) is True
-    assert keys == ["{Ctrl}v{Enter}"]
+    assert batches == [
+        [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
+        [(1, 0x0D, 0), (1, 0x0D, 2)],
+    ]
+
+
+def test_native_partial_paste_input_does_not_submit(monkeypatch):
+    batches = _capture_send_input(monkeypatch, [3, 1])
+    native = _WindowsNative()
+    monkeypatch.setattr(native, "is_foreground", lambda _: True)
+
+    assert native.send_paste_and_submit(10) is False
+    assert batches == [
+        [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
+        [(1, 0x11, 2)],
+    ]
+
+
+def test_native_foreground_loss_after_paste_does_not_submit(monkeypatch):
+    batches = _capture_send_input(monkeypatch, [4])
+    native = _WindowsNative()
+    foreground = iter([True, False])
+    monkeypatch.setattr(native, "is_foreground", lambda _: next(foreground))
+
+    assert native.send_paste_and_submit(10) is False
+    assert batches == [[(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)]]
 
 
 def test_native_capabilities_read_expand_collapse_pattern_state():
