@@ -161,24 +161,25 @@ input { accent-color: #263f77; }
 .project-chevron { transition: transform .12s ease; }
 .project-chevron.expanded { transform: rotate(180deg); }
 .project-name { min-width: 0; overflow-wrap: anywhere; }
+.project-meta, .task-meta { display: inline-flex; align-items: center; justify-self: end; gap: .35rem; }
+.project-host { color: #6b707a; font-size: .76rem; font-weight: 600; white-space: nowrap; }
 .worktree-marker { color: #50535a; }
 .status-icon--ready { color: #2c63c5; }
 .status-icon--connected { color: #22844b; }
-.status-icon--idle, .status-icon--busy { color: #6b707a; }
-.status-icon--ready path, .status-icon--connected path, .status-icon--idle path { fill: currentColor; stroke: none; }
+.status-icon--busy { color: #6b707a; }
+.status-icon--ready path, .status-icon--connected path { fill: currentColor; stroke: none; }
 .status-icon--busy { animation: navigator-spinner 1s linear infinite; }
 @keyframes navigator-spinner { to { transform: rotate(360deg); } }
 .task-list { border-top: 1px solid #e3e4e7; }
 .task {
-  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: .45rem;
-  padding: .5rem .55rem .5rem 1.8rem;
+  padding: .5rem .55rem .5rem 3.25rem;
   border: 0;
   border-radius: 0;
   background: #fff;
   font-weight: 500;
 }
-.task:not(:has(.worktree-marker)) { grid-template-columns: minmax(0, 1fr) auto; padding-left: 3.25rem; }
 .task.selected { background: #edf2ff; color: #193977; }
 
 @media (prefers-reduced-motion: reduce) {

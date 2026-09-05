@@ -381,7 +381,7 @@ test("phone navigator renders accessible state and worktree icons without status
         available: true,
         projects: [
           {
-            name: "Alpha", connected: true, expanded: true, host: null, state: "connected",
+            name: "Alpha", connected: true, expanded: true, host: "private_3", state: "connected",
             tasks: [
               { title: "Running", state: "busy", worktree: true, selected: true },
               { title: "Finished", state: "done", worktree: false, selected: false },
@@ -389,8 +389,9 @@ test("phone navigator renders accessible state and worktree icons without status
               { title: "Waiting", state: "idle", worktree: false, selected: false },
             ],
           },
-          { name: "Beta", connected: false, expanded: false, host: null, state: "busy", tasks: [] },
+          { name: "Beta", connected: false, expanded: false, host: "remote-ssh", state: "busy", tasks: [] },
           { name: "Gamma", connected: false, expanded: false, host: null, state: "idle", tasks: [] },
+          { name: "Delta", connected: false, expanded: false, host: "", state: "unknown", tasks: [] },
         ],
       });
     }
@@ -407,18 +408,34 @@ test("phone navigator renders accessible state and worktree icons without status
   await phone.ready;
 
   const projects = documentRef.elements["navigator-projects"].children;
-  assert.equal(projects.length, 3);
-  assertIcon(projects[0].children[0].children[2], "status-icon status-icon--connected", "Connected");
-  assertIcon(projects[1].children[0].children[2], "status-icon status-icon--busy", "Busy");
-  assertIcon(projects[2].children[0].children[2], "status-icon status-icon--idle", "Idle");
+  assert.equal(projects.length, 4);
+  const alphaMeta = projects[0].children[0].children[2];
+  assert.equal(alphaMeta.className, "project-meta");
+  assert.equal(alphaMeta.children[0].className, "project-host");
+  assert.equal(alphaMeta.children[0].textContent, "private_3");
+  assertIcon(alphaMeta.children[1], "status-icon status-icon--connected", "Connected");
+  const betaMeta = projects[1].children[0].children[2];
+  assert.equal(betaMeta.children[0].textContent, "remote-ssh");
+  assertIcon(betaMeta.children[1], "status-icon status-icon--busy", "Busy");
+  const gammaMeta = projects[2].children[0].children[2];
+  assert.equal(gammaMeta.children[0].textContent, "local");
+  assertIcon(gammaMeta.children[1], "status-icon status-icon--connected", "Connected");
+  const deltaMeta = projects[3].children[0].children[2];
+  assert.equal(deltaMeta.children[0].textContent, "local");
+  assertIcon(deltaMeta.children[1], "status-icon status-icon--connected", "Connected");
 
   const tasks = projects[0].children[1].children;
   assert.equal(tasks[0].classList.contains("selected"), true);
-  assertIcon(tasks[0].children[0], "worktree-marker", "Worktree");
-  assertIcon(tasks[0].children[2], "status-icon status-icon--busy", "Busy");
-  assertIcon(tasks[1].children[1], "status-icon status-icon--ready", "Ready");
-  assertIcon(tasks[2].children[1], "status-icon status-icon--ready", "Ready");
-  assertIcon(tasks[3].children[1], "status-icon status-icon--ready", "Ready");
+  assert.equal(tasks[0].children[0].textContent, "Running");
+  const runningMeta = tasks[0].children[1];
+  assert.equal(runningMeta.className, "task-meta");
+  assertIcon(runningMeta.children[0], "worktree-marker", "Worktree");
+  assertIcon(runningMeta.children[1], "status-icon status-icon--busy", "Busy");
+  assert.equal(tasks[1].children[0].textContent, "Finished");
+  assert.equal(tasks[1].children[1].className, "task-meta");
+  assertIcon(tasks[1].children[1].children[0], "status-icon status-icon--ready", "Ready");
+  assertIcon(tasks[2].children[1].children[0], "status-icon status-icon--ready", "Ready");
+  assertIcon(tasks[3].children[1].children[0], "status-icon status-icon--ready", "Ready");
 });
 
 test("phone pointer and composer listeners dispatch validated actions", async () => {

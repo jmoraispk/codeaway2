@@ -223,12 +223,9 @@ function initializePhoneWorkspace({
   }
 
   function projectStatusIcon(state) {
-    const statuses = {
-      busy: ["busy", "Busy"],
-      connected: ["connected", "Connected"],
-      idle: ["idle", "Idle"],
-    };
-    const [kind, label] = statuses[state] || statuses.idle;
+    const [kind, label] = state === "busy"
+      ? ["busy", "Busy"]
+      : ["connected", "Connected"];
     const path = kind === "busy"
       ? "M12 3a9 9 0 1 0 9 9"
       : "M12 5.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13";
@@ -274,7 +271,13 @@ function initializePhoneWorkspace({
       const name = documentRef.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;
-      toggle.append(chevron, name, projectStatusIcon(project.state));
+      const projectMeta = documentRef.createElement("span");
+      projectMeta.className = "project-meta";
+      const host = documentRef.createElement("span");
+      host.className = "project-host";
+      host.textContent = project.host || "local";
+      projectMeta.append(host, projectStatusIcon(project.state));
+      toggle.append(chevron, name, projectMeta);
       toggle.addEventListener("click", () => {
         state.expanded = toggleProject(state.expanded, project.name);
         renderNavigator(state.navigator);
@@ -289,8 +292,10 @@ function initializePhoneWorkspace({
         taskButton.className = "task";
         taskButton.type = "button";
         taskButton.classList.toggle("selected", task.selected);
+        const taskMeta = documentRef.createElement("span");
+        taskMeta.className = "task-meta";
         if (task.worktree) {
-          taskButton.append(svgIcon(
+          taskMeta.append(svgIcon(
             "worktree-marker",
             "M12 4v6m0 0-6 6m6-6 6 6M12 4a2 2 0 1 0 0 .01M6 18a2 2 0 1 0 0 .01M18 18a2 2 0 1 0 0 .01",
             "Worktree",
@@ -298,7 +303,8 @@ function initializePhoneWorkspace({
         }
         const title = documentRef.createElement("span");
         title.textContent = task.title;
-        taskButton.append(title, taskStatusIcon(task.state));
+        taskMeta.append(taskStatusIcon(task.state));
+        taskButton.append(title, taskMeta);
         taskButton.addEventListener("click", async () => {
           if (state.actionBusy) return;
           try {
