@@ -1,7 +1,7 @@
 import json
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -127,10 +127,13 @@ def json_headers(**extra):
 @contextmanager
 def running_server(application):
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(application))
+    host, port = server.server_address
+    application.state.config = replace(
+        application.state.config, bind_ip=host, port=port
+    )
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        host, port = server.server_address
         yield f"http://{host}:{port}"
     finally:
         server.shutdown()
@@ -159,6 +162,7 @@ def test_windows_returns_compatible_discovery_results(app):
     assert payload(response)["windows"] == [
         {
             "agent_id": "fake",
+            "current": True,
             "id": "window-1",
             "process_path": "C:/Apps/agent.exe",
             "surfaces": {
@@ -169,6 +173,56 @@ def test_windows_returns_compatible_discovery_results(app):
             "title": "Agent Window",
         }
     ]
+
+
+def test_windows_marks_current_target_and_returns_its_saved_surfaces(app):
+    saved = SurfaceMap(
+        FractionalRegion(0, 0, 0.25, 1),
+        FractionalRegion(0.25, 0, 0.75, 0.7),
+        FractionalRegion(0.35, 0.7, 0.5, 0.25),
+    )
+    app.state.target = AgentTarget("fake", app.state.target.window, saved)
+    app.fake_desktop.windows.append(
+        DesktopWindow(
+            "window-2",
+            43,
+            "Other Agent Window",
+            "C:/Apps/agent.exe",
+            PixelRegion(200, 100, 800, 600),
+        )
+    )
+
+    windows = payload(app.dispatch("GET", "/api/windows", {}, b""))["windows"]
+
+    assert [(window["title"], window["current"]) for window in windows] == [
+        ("Agent Window", True),
+        ("Other Agent Window", False),
+    ]
+    assert windows[0]["surfaces"] == {
+        "sidebar": [0, 0, 0.25, 1],
+        "conversation": [0.25, 0, 0.75, 0.7],
+        "composer": [0.35, 0.7, 0.5, 0.25],
+    }
+
+
+def test_selecting_the_current_window_preserves_saved_surfaces(app):
+    saved = SurfaceMap(
+        FractionalRegion(0, 0, 0.25, 1),
+        FractionalRegion(0.25, 0, 0.75, 0.7),
+        FractionalRegion(0.35, 0.7, 0.5, 0.25),
+    )
+    app.state.target = AgentTarget("fake", app.state.target.window, saved)
+    window_id = payload(app.dispatch("GET", "/api/windows", {}, b""))["windows"][0]["id"]
+
+    response = app.dispatch(
+        "POST",
+        "/api/select",
+        json_headers(),
+        json.dumps({"window_id": window_id}).encode(),
+    )
+
+    assert response.status == 200
+    assert app.state.target.surfaces == saved
 
 
 def test_select_chooses_a_discovered_window(app):
@@ -247,6 +301,23 @@ def test_cross_origin_action_is_rejected(app):
 
     assert response.status == 403
     assert payload(response)["error"]["code"] == "origin_mismatch"
+    assert app.fake_agent.calls == []
+
+
+def test_matching_host_and_origin_are_rejected_when_authority_is_not_configured(app):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        {
+            "Host": "attacker.example:8765",
+            "Origin": "http://attacker.example:8765",
+            "Content-Type": "application/json",
+        },
+        b'{"kind":"scroll","amount":-2}',
+    )
+
+    assert response.status == 403
+    assert payload(response)["error"]["code"] == "host_mismatch"
     assert app.fake_agent.calls == []
 
 
@@ -667,6 +738,13 @@ def test_http_handler_adapts_live_get_and_post_requests(app):
     assert status_payload["revision"] == 0
     assert action_payload["revision"] == 1
     assert app.fake_agent.calls == [("scroll", -2)]
+
+
+def test_http_handler_denies_framing(app):
+    with running_server(app) as url:
+        with urlopen(f"{url}/setup") as response:
+            assert response.headers["X-Frame-Options"] == "DENY"
+            assert response.headers["Content-Security-Policy"] == "frame-ancestors 'none'"
 
 
 def test_http_handler_converts_unexpected_dispatch_exception_to_json(app):

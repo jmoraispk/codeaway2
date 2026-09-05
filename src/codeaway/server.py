@@ -111,6 +111,17 @@ class Application:
             return None, self._error(
                 413, "body_too_large", "JSON request body exceeds 65,536 bytes."
             )
+        with self.state.state_lock:
+            expected_authority = (
+                f"{self.state.config.bind_ip}:{self.state.config.port}"
+            ).casefold()
+        host = normalized.get("host", "").strip().casefold()
+        if host != expected_authority:
+            return None, self._error(
+                403,
+                "host_mismatch",
+                "Request Host must match the configured CodeAway address.",
+            )
         origin = normalized.get("origin")
         if origin is not None:
             try:
@@ -121,11 +132,10 @@ class Application:
                     "origin_mismatch",
                     "Request Origin must match the CodeAway Host.",
                 )
-            host = normalized.get("host")
             if (
                 parsed.scheme.casefold() != "http"
                 or not parsed.netloc
-                or parsed.netloc.casefold() != (host or "").casefold()
+                or parsed.netloc.casefold() != expected_authority
                 or parsed.path not in {"", "/"}
                 or parsed.query
                 or parsed.fragment
@@ -196,6 +206,15 @@ class Application:
             target.surfaces,
         )
 
+    @staticmethod
+    def _same_window_identity(first: AgentTarget, second: AgentTarget) -> bool:
+        return (
+            first.agent_id == second.agent_id
+            and first.window.native_handle == second.window.native_handle
+            and os.path.normcase(os.path.normpath(first.window.process_path))
+            == os.path.normcase(os.path.normpath(second.window.process_path))
+        )
+
     def _current_target(self) -> AgentTarget | None:
         with self.state.state_lock:
             selected = self.state.target
@@ -233,8 +252,16 @@ class Application:
     def _windows(self) -> Response:
         targets = self.registry.discover(self.desktop)
         with self.state.state_lock:
+            current = self.state.target
+            presented_targets = [
+                AgentTarget(target.agent_id, target.window, current.surfaces)
+                if current is not None
+                and self._same_window_identity(target, current)
+                else target
+                for target in targets
+            ]
             self._discovered_targets = {
-                target.window.id: target for target in targets
+                target.window.id: target for target in presented_targets
             }
         return self._json_response(
             200,
@@ -242,12 +269,16 @@ class Application:
                 "windows": [
                     {
                         "agent_id": target.agent_id,
+                        "current": (
+                            current is not None
+                            and self._same_window_identity(target, current)
+                        ),
                         "id": target.window.id,
                         "process_path": target.window.process_path,
                         "surfaces": self._surfaces_value(target.surfaces),
                         "title": target.window.title,
                     }
-                    for target in targets
+                    for target in presented_targets
                 ]
             },
         )
@@ -515,6 +546,8 @@ def make_handler(application: Application, logger: Any | None = None):
             self.send_response(response.status)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(response.body)))
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.end_headers()
