@@ -150,16 +150,20 @@ function createPhoneController({ postAction, requestImage, onComposerClear = () 
   return controller;
 }
 
-function initializePhoneWorkspace() {
+function initializePhoneWorkspace({
+  documentRef = document,
+  windowRef = window,
+  fetchFn = fetch,
+} = {}) {
   const elements = {
-    composer: document.querySelector("#composer"),
-    composerInput: document.querySelector("#composer-input"),
-    composerMessage: document.querySelector("#composer-message"),
-    composerSend: document.querySelector("#composer-send"),
-    conversationImage: document.querySelector("#conversation-image"),
-    conversationMessage: document.querySelector("#conversation-message"),
-    navigatorProjects: document.querySelector("#navigator-projects"),
-    statusMessage: document.querySelector("#status-message"),
+    composer: documentRef.querySelector("#composer"),
+    composerInput: documentRef.querySelector("#composer-input"),
+    composerMessage: documentRef.querySelector("#composer-message"),
+    composerSend: documentRef.querySelector("#composer-send"),
+    conversationImage: documentRef.querySelector("#conversation-image"),
+    conversationMessage: documentRef.querySelector("#conversation-message"),
+    navigatorProjects: documentRef.querySelector("#navigator-projects"),
+    statusMessage: documentRef.querySelector("#status-message"),
   };
   const state = {
     actionBusy: false,
@@ -177,7 +181,7 @@ function initializePhoneWorkspace() {
   }
 
   async function request(path, options = {}) {
-    const response = await fetch(path, options);
+    const response = await fetchFn(path, options);
     if (!response.ok) {
       let message = `Request failed (${response.status}).`;
       try { message = (await response.json()).error.message; } catch (_) { /* use status */ }
@@ -195,13 +199,13 @@ function initializePhoneWorkspace() {
   }
 
   function svgIcon(className, path) {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const svg = documentRef.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("class", className);
     svg.setAttribute("viewBox", "0 0 24 24");
     svg.setAttribute("width", "16");
     svg.setAttribute("height", "16");
     svg.setAttribute("aria-hidden", "true");
-    const shape = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const shape = documentRef.createElementNS("http://www.w3.org/2000/svg", "path");
     shape.setAttribute("d", path);
     shape.setAttribute("fill", "none");
     shape.setAttribute("stroke", "currentColor");
@@ -215,7 +219,8 @@ function initializePhoneWorkspace() {
   function renderStatus(status) {
     if (status.ready) {
       const target = status.target?.title || "agent";
-      showMessage(elements.statusMessage, `Connected to ${target}.`);
+      const agent = status.target?.agent_id || "agent";
+      showMessage(elements.statusMessage, `Connected: ${agent} — ${target} (ready).`);
       return;
     }
     showMessage(elements.statusMessage, "Setup is required before controls are available.", true);
@@ -230,19 +235,19 @@ function initializePhoneWorkspace() {
     for (const project of snapshot.projects) {
       if (!(project.name in state.expanded)) state.expanded[project.name] = project.expanded;
       const expanded = state.expanded[project.name];
-      const projectItem = document.createElement("section");
+      const projectItem = documentRef.createElement("section");
       projectItem.className = "project";
 
-      const toggle = document.createElement("button");
+      const toggle = documentRef.createElement("button");
       toggle.className = "project-toggle";
       toggle.type = "button";
       toggle.setAttribute("aria-expanded", String(expanded));
       const chevron = svgIcon("project-chevron", "m8 9 4 4 4-4");
       chevron.classList.toggle("expanded", expanded);
-      const name = document.createElement("span");
+      const name = documentRef.createElement("span");
       name.className = "project-name";
       name.textContent = project.name;
-      const projectState = document.createElement("span");
+      const projectState = documentRef.createElement("span");
       projectState.className = "project-state";
       projectState.textContent = project.state;
       toggle.append(chevron, name, projectState);
@@ -252,20 +257,20 @@ function initializePhoneWorkspace() {
       });
       projectItem.append(toggle);
 
-      const tasks = document.createElement("div");
+      const tasks = documentRef.createElement("div");
       tasks.className = "task-list";
       tasks.hidden = !expanded;
       for (const task of project.tasks) {
-        const taskButton = document.createElement("button");
+        const taskButton = documentRef.createElement("button");
         taskButton.className = "task";
         taskButton.type = "button";
         taskButton.classList.toggle("selected", task.selected);
         if (task.worktree) {
           taskButton.append(svgIcon("worktree-marker", "M7 4v9a3 3 0 0 0 3 3h1m-1-12 4 4m-4-4-4 4m8 8 4 4m-4-4-4 4"));
         }
-        const title = document.createElement("span");
+        const title = documentRef.createElement("span");
         title.textContent = task.title;
-        const taskState = document.createElement("span");
+        const taskState = documentRef.createElement("span");
         taskState.className = "task-state";
         taskState.textContent = task.state;
         taskButton.append(title, taskState);
@@ -366,14 +371,15 @@ function initializePhoneWorkspace() {
   }
 
   function startPolling() {
-    if (state.pollTimer !== null) return;
-    refreshWorkspace();
-    state.pollTimer = window.setInterval(refreshWorkspace, 2000);
+    if (state.pollTimer !== null) return state.refreshing || Promise.resolve();
+    const refresh = refreshWorkspace();
+    state.pollTimer = windowRef.setInterval(refreshWorkspace, 2000);
+    return refresh;
   }
 
   function stopPolling() {
     if (state.pollTimer === null) return;
-    window.clearInterval(state.pollTimer);
+    windowRef.clearInterval(state.pollTimer);
     state.pollTimer = null;
   }
 
@@ -429,16 +435,255 @@ function initializePhoneWorkspace() {
       elements.composerInput.disabled = false;
     }
   });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      startPolling();
-      refreshWorkspace();
+  documentRef.addEventListener("visibilitychange", () => {
+    if (documentRef.visibilityState === "visible") return startPolling();
+    stopPolling();
+    return undefined;
+  });
+
+  const ready = documentRef.visibilityState === "visible"
+    ? startPolling()
+    : Promise.resolve();
+  return { ready, refreshWorkspace, startPolling, stopPolling };
+}
+
+function initializeSetup({ documentRef = document, fetchFn = fetch } = {}) {
+  const elements = {
+    complete: documentRef.querySelector("#setup-complete"),
+    dragHelp: documentRef.querySelector("#drag-help"),
+    loadWindow: documentRef.querySelector("#load-window"),
+    message: documentRef.querySelector("#setup-message"),
+    overlays: documentRef.querySelector("#region-overlays"),
+    refreshWindows: documentRef.querySelector("#refresh-windows"),
+    regionChoice: documentRef.querySelector("#region-choice"),
+    saveCalibration: documentRef.querySelector("#save-calibration"),
+    screenshot: documentRef.querySelector("#window-screenshot"),
+    stage: documentRef.querySelector("#screenshot-stage"),
+    windowSelect: documentRef.querySelector("#window-select"),
+  };
+  const state = {
+    drag: null,
+    phoneUrl: null,
+    selectedWindow: null,
+    status: null,
+    surfaces: null,
+    windows: [],
+  };
+
+  function showMessage(message, error = false) {
+    elements.message.textContent = message;
+    elements.message.classList.toggle("error", error);
+  }
+
+  function selectedRegion() {
+    return documentRef.querySelector('input[name="region"]:checked').value;
+  }
+
+  function pointFor(event) {
+    const box = elements.screenshot.getBoundingClientRect();
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
+  }
+
+  function currentRectangle() {
+    if (!state.drag) return null;
+    const box = elements.screenshot.getBoundingClientRect();
+    return normalizeRectangle(state.drag.start, state.drag.end, box.width, box.height);
+  }
+
+  function renderRegions() {
+    if (!state.surfaces) return;
+    elements.overlays.replaceChildren();
+    const active = selectedRegion();
+    const drawing = currentRectangle();
+    for (const name of regionNames) {
+      const surface = name === active && drawing ? drawing : state.surfaces[name];
+      if (!surface) continue;
+      const overlay = documentRef.createElement("div");
+      overlay.className = `region-overlay ${name}${name === active ? " selected" : ""}`;
+      overlay.style.left = `${surface.x * 100}%`;
+      overlay.style.top = `${surface.y * 100}%`;
+      overlay.style.width = `${surface.width * 100}%`;
+      overlay.style.height = `${surface.height * 100}%`;
+      const label = documentRef.createElement("span");
+      label.textContent = setupDiagramLabels[regionNames.indexOf(name)];
+      overlay.append(label);
+      elements.overlays.append(overlay);
+    }
+  }
+
+  async function request(path, options = {}) {
+    const response = await fetchFn(path, options);
+    if (!response.ok) {
+      let message = `Request failed (${response.status}).`;
+      try { message = (await response.json()).error.message; } catch (_) { /* use status */ }
+      throw new Error(message);
+    }
+    return response.headers.get("content-type")?.includes("application/json")
+      ? response.json()
+      : response;
+  }
+
+  async function loadScreenshot(revision) {
+    elements.stage.hidden = false;
+    elements.dragHelp.hidden = false;
+    elements.screenshot.src = `/api/screenshot/window?revision=${encodeURIComponent(revision)}`;
+    await elements.screenshot.decode();
+    renderRegions();
+  }
+
+  async function selectWindow() {
+    const windowId = elements.windowSelect.value;
+    const selected = state.windows.find((candidate) => candidate.id === windowId);
+    if (!selected) return;
+    elements.loadWindow.disabled = true;
+    elements.saveCalibration.disabled = true;
+    showMessage("Loading the selected window…");
+    try {
+      const result = await request("/api/select", jsonRequest("POST", { window_id: windowId }));
+      state.selectedWindow = selected;
+      state.surfaces = createSetupModel(selected.surfaces, state.status).surfaces;
+      await loadScreenshot(result.revision);
+      elements.regionChoice.disabled = false;
+      elements.saveCalibration.disabled = false;
+      showMessage("Drag a rectangle for each area, then save all three together.");
+    } catch (error) {
+      showMessage(error.message, true);
+    } finally {
+      elements.loadWindow.disabled = !elements.windowSelect.value;
+    }
+  }
+
+  async function loadWindows() {
+    elements.refreshWindows.disabled = true;
+    elements.loadWindow.disabled = true;
+    try {
+      const result = await request("/api/windows");
+      state.windows = result.windows;
+      elements.windowSelect.replaceChildren();
+      if (!state.windows.length) {
+        state.selectedWindow = null;
+        state.surfaces = null;
+        elements.windowSelect.disabled = true;
+        elements.regionChoice.disabled = true;
+        elements.saveCalibration.disabled = true;
+        elements.stage.hidden = true;
+        elements.dragHelp.hidden = true;
+        elements.refreshWindows.hidden = false;
+        showMessage("No compatible agent windows are open. Open one, then select Refresh windows.", true);
+        return;
+      }
+
+      elements.refreshWindows.hidden = true;
+      const current = state.windows.find((candidate) => candidate.current);
+      if (!current) {
+        const placeholder = documentRef.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Choose a window…";
+        placeholder.disabled = true;
+        elements.windowSelect.append(placeholder);
+      }
+      for (const candidate of state.windows) {
+        const option = documentRef.createElement("option");
+        option.value = candidate.id;
+        const pieces = candidate.process_path.split(/[\\\\/]/);
+        option.textContent = `${candidate.agent_id} — ${candidate.title} (${pieces.at(-1)})`;
+        elements.windowSelect.append(option);
+      }
+      elements.windowSelect.disabled = false;
+      if (current) {
+        elements.windowSelect.value = current.id;
+        elements.loadWindow.disabled = false;
+        state.selectedWindow = current;
+        state.surfaces = createSetupModel(current.surfaces, state.status).surfaces;
+        elements.regionChoice.disabled = false;
+        elements.saveCalibration.disabled = false;
+        await loadScreenshot(state.status.revision);
+        showMessage("Current calibration loaded. Select another window and choose Load window only to change targets.");
+      } else {
+        elements.windowSelect.value = "";
+        showMessage("Choose a window, then select Load window.");
+      }
+    } catch (error) {
+      showMessage(error.message, true);
+    } finally {
+      elements.refreshWindows.disabled = false;
+    }
+  }
+
+  async function initialize() {
+    try {
+      state.status = await request("/api/status");
+      state.phoneUrl = phoneUrlForStatus(state.status);
+      await loadWindows();
+    } catch (error) {
+      showMessage(error.message, true);
+    }
+  }
+
+  elements.loadWindow.addEventListener("click", selectWindow);
+  elements.refreshWindows.addEventListener("click", loadWindows);
+  elements.windowSelect.addEventListener("change", () => {
+    elements.loadWindow.disabled = !state.windows.some(
+      (candidate) => candidate.id === elements.windowSelect.value,
+    );
+  });
+  elements.regionChoice.addEventListener("change", renderRegions);
+  elements.screenshot.addEventListener("load", renderRegions);
+  elements.stage.addEventListener("pointerdown", (event) => {
+    if (!state.surfaces || !elements.screenshot.complete) return;
+    event.preventDefault();
+    const point = pointFor(event);
+    state.drag = { start: point, end: point };
+    elements.stage.setPointerCapture(event.pointerId);
+    renderRegions();
+  });
+  elements.stage.addEventListener("pointermove", (event) => {
+    if (!state.drag) return;
+    state.drag.end = pointFor(event);
+    renderRegions();
+  });
+  elements.stage.addEventListener("pointerup", (event) => {
+    if (!state.drag) return;
+    state.drag.end = pointFor(event);
+    const rectangle = currentRectangle();
+    state.drag = null;
+    if (rectangle.width < minimumRegionSize || rectangle.height < minimumRegionSize) {
+      showMessage("That area is too small. Drag an area at least 1% of the screenshot wide and tall.", true);
     } else {
-      stopPolling();
+      state.surfaces[selectedRegion()] = rectangle;
+      showMessage("Area updated. Save when all three rectangles look right.");
+    }
+    renderRegions();
+  });
+  elements.stage.addEventListener("pointercancel", () => {
+    state.drag = null;
+    renderRegions();
+  });
+  elements.saveCalibration.addEventListener("click", async () => {
+    elements.saveCalibration.disabled = true;
+    showMessage("Saving calibration…");
+    try {
+      await request("/api/calibration", calibrationRequest(state.surfaces));
+      const phoneUrl = state.phoneUrl;
+      elements.complete.replaceChildren(
+        "Saved. On your phone, open ",
+        phoneUrl,
+        ". Then use the ",
+      );
+      const link = documentRef.createElement("a");
+      link.href = "/";
+      link.textContent = "CodeAway controls";
+      elements.complete.append(link, ".");
+      elements.complete.hidden = false;
+      showMessage("Calibration saved.");
+    } catch (error) {
+      showMessage(error.message, true);
+    } finally {
+      elements.saveCalibration.disabled = false;
     }
   });
 
-  if (document.visibilityState === "visible") startPolling();
+  return { ready: initialize(), loadWindows, selectWindow };
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -446,6 +691,8 @@ if (typeof module !== "undefined" && module.exports) {
     calibrationRequest,
     createPhoneController,
     createSetupModel,
+    initializePhoneWorkspace,
+    initializeSetup,
     normalizeRectangle,
     phoneUrlForStatus,
     pointToFraction,
@@ -461,201 +708,6 @@ if (typeof document !== "undefined") {
       initializePhoneWorkspace();
       return;
     }
-    const elements = {
-      complete: document.querySelector("#setup-complete"),
-      dragHelp: document.querySelector("#drag-help"),
-      loadWindow: document.querySelector("#load-window"),
-      message: document.querySelector("#setup-message"),
-      overlays: document.querySelector("#region-overlays"),
-      regionChoice: document.querySelector("#region-choice"),
-      saveCalibration: document.querySelector("#save-calibration"),
-      screenshot: document.querySelector("#window-screenshot"),
-      stage: document.querySelector("#screenshot-stage"),
-      windowSelect: document.querySelector("#window-select"),
-    };
-    const state = {
-      drag: null,
-      phoneUrl: null,
-      selectedWindow: null,
-      status: null,
-      surfaces: null,
-      windows: [],
-    };
-
-    function showMessage(message, error = false) {
-      elements.message.textContent = message;
-      elements.message.classList.toggle("error", error);
-    }
-
-    function selectedRegion() {
-      return document.querySelector('input[name="region"]:checked').value;
-    }
-
-    function pointFor(event) {
-      const box = elements.screenshot.getBoundingClientRect();
-      return { x: event.clientX - box.left, y: event.clientY - box.top };
-    }
-
-    function currentRectangle() {
-      if (!state.drag) return null;
-      const box = elements.screenshot.getBoundingClientRect();
-      return normalizeRectangle(state.drag.start, state.drag.end, box.width, box.height);
-    }
-
-    function renderRegions() {
-      if (!state.surfaces) return;
-      elements.overlays.replaceChildren();
-      const active = selectedRegion();
-      const drawing = currentRectangle();
-      for (const name of regionNames) {
-        const surface = name === active && drawing ? drawing : state.surfaces[name];
-        if (!surface) continue;
-        const overlay = document.createElement("div");
-        overlay.className = `region-overlay ${name}${name === active ? " selected" : ""}`;
-        overlay.style.left = `${surface.x * 100}%`;
-        overlay.style.top = `${surface.y * 100}%`;
-        overlay.style.width = `${surface.width * 100}%`;
-        overlay.style.height = `${surface.height * 100}%`;
-        const label = document.createElement("span");
-        label.textContent = setupDiagramLabels[regionNames.indexOf(name)];
-        overlay.append(label);
-        elements.overlays.append(overlay);
-      }
-    }
-
-    async function request(path, options = {}) {
-      const response = await fetch(path, options);
-      if (!response.ok) {
-        let message = `Request failed (${response.status}).`;
-        try { message = (await response.json()).error.message; } catch (_) { /* use status */ }
-        throw new Error(message);
-      }
-      return response.headers.get("content-type")?.includes("application/json")
-        ? response.json()
-        : response;
-    }
-
-    async function loadScreenshot(revision) {
-      elements.stage.hidden = false;
-      elements.dragHelp.hidden = false;
-      elements.screenshot.src = `/api/screenshot/window?revision=${encodeURIComponent(revision)}`;
-      await elements.screenshot.decode();
-      renderRegions();
-    }
-
-    async function selectWindow() {
-      const windowId = elements.windowSelect.value;
-      const selected = state.windows.find((candidate) => candidate.id === windowId);
-      if (!selected) return;
-      elements.loadWindow.disabled = true;
-      elements.saveCalibration.disabled = true;
-      showMessage("Loading the selected window…");
-      try {
-        const result = await request("/api/select", jsonRequest("POST", { window_id: windowId }));
-        state.selectedWindow = selected;
-        state.surfaces = createSetupModel(selected.surfaces, state.status).surfaces;
-        await loadScreenshot(result.revision);
-        elements.regionChoice.disabled = false;
-        elements.saveCalibration.disabled = false;
-        showMessage("Drag a rectangle for each area, then save all three together.");
-      } catch (error) {
-        showMessage(error.message, true);
-      } finally {
-        elements.loadWindow.disabled = false;
-      }
-    }
-
-    async function loadWindows() {
-      try {
-        const result = await request("/api/windows");
-        state.windows = result.windows;
-        elements.windowSelect.replaceChildren();
-        if (!state.windows.length) {
-          showMessage("No compatible agent windows are open. Open one, then reload this page.", true);
-          return;
-        }
-        for (const candidate of state.windows) {
-          const option = document.createElement("option");
-          option.value = candidate.id;
-          const pieces = candidate.process_path.split(/[\\\\/]/);
-          option.textContent = `${candidate.agent_id} — ${candidate.title} (${pieces.at(-1)})`;
-          elements.windowSelect.append(option);
-        }
-        elements.windowSelect.disabled = false;
-        elements.loadWindow.disabled = false;
-        await selectWindow();
-      } catch (error) {
-        showMessage(error.message, true);
-      }
-    }
-
-    async function initialize() {
-      try {
-        state.status = await request("/api/status");
-        state.phoneUrl = phoneUrlForStatus(state.status);
-        await loadWindows();
-      } catch (error) {
-        showMessage(error.message, true);
-      }
-    }
-
-    elements.loadWindow.addEventListener("click", selectWindow);
-    elements.regionChoice.addEventListener("change", renderRegions);
-    elements.screenshot.addEventListener("load", renderRegions);
-    elements.stage.addEventListener("pointerdown", (event) => {
-      if (!state.surfaces || !elements.screenshot.complete) return;
-      event.preventDefault();
-      const point = pointFor(event);
-      state.drag = { start: point, end: point };
-      elements.stage.setPointerCapture(event.pointerId);
-      renderRegions();
-    });
-    elements.stage.addEventListener("pointermove", (event) => {
-      if (!state.drag) return;
-      state.drag.end = pointFor(event);
-      renderRegions();
-    });
-    elements.stage.addEventListener("pointerup", (event) => {
-      if (!state.drag) return;
-      state.drag.end = pointFor(event);
-      const rectangle = currentRectangle();
-      state.drag = null;
-      if (rectangle.width < minimumRegionSize || rectangle.height < minimumRegionSize) {
-        showMessage("That area is too small. Drag an area at least 1% of the screenshot wide and tall.", true);
-      } else {
-        state.surfaces[selectedRegion()] = rectangle;
-        showMessage("Area updated. Save when all three rectangles look right.");
-      }
-      renderRegions();
-    });
-    elements.stage.addEventListener("pointercancel", () => {
-      state.drag = null;
-      renderRegions();
-    });
-    elements.saveCalibration.addEventListener("click", async () => {
-      elements.saveCalibration.disabled = true;
-      showMessage("Saving calibration…");
-      try {
-        await request("/api/calibration", calibrationRequest(state.surfaces));
-        const phoneUrl = state.phoneUrl;
-        elements.complete.replaceChildren(
-          "Saved. On your phone, open ",
-          phoneUrl,
-          ". Then use the ",
-        );
-        const link = document.createElement("a");
-        link.href = "/";
-        link.textContent = "CodeAway controls";
-        elements.complete.append(link, ".");
-        elements.complete.hidden = false;
-        showMessage("Calibration saved.");
-      } catch (error) {
-        showMessage(error.message, true);
-      } finally {
-        elements.saveCalibration.disabled = false;
-      }
-    });
-
-    initialize();
+    initializeSetup();
   });
 }

@@ -468,6 +468,7 @@ def test_setup_resource_contains_the_capture_editor_and_assets(app):
     assert 'data-region="sidebar"' in page
     assert 'data-region="conversation"' in page
     assert 'data-region="composer"' in page
+    assert 'id="refresh-windows"' in page
     assert "/app.js" in page
     assert "/style.css" in page
 
