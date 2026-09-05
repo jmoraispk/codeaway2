@@ -269,7 +269,7 @@ class WindowsDesktop:
         self._native.set_clipboard_text(text)
         self._require_foreground(window)
         if not self._native.send_paste_and_submit(window.native_handle):
-            raise InputUnavailable("the exact target window is not foreground")
+            raise InputUnavailable("input injection failed")
 
 
 class _WindowsNative:
@@ -556,13 +556,24 @@ class _WindowsNative:
         user32 = ctypes.windll.user32
         user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int)
         user32.SendInput.restype = wintypes.UINT
-        paste = (Input * 4)(
+
+        def send_inputs(*events: Input) -> int:
+            inputs = (Input * len(events))(*events)
+            return user32.SendInput(len(inputs), inputs, ctypes.sizeof(Input))
+
+        def drain_key_releases(*releases: Input) -> bool:
+            all_released = True
+            for release in releases:
+                all_released = send_inputs(release) == 1 and all_released
+            return all_released
+
+        paste = (
             keyboard_input(0x11),  # VK_CONTROL
             keyboard_input(0x56),  # VK_V
             keyboard_input(0x56, 0x0002),  # KEYEVENTF_KEYUP
             keyboard_input(0x11, 0x0002),  # KEYEVENTF_KEYUP
         )
-        paste_sent = user32.SendInput(len(paste), paste, ctypes.sizeof(Input))
+        paste_sent = send_inputs(*paste)
         if paste_sent != len(paste):
             key_releases = {
                 1: (keyboard_input(0x11, 0x0002),),
@@ -570,16 +581,20 @@ class _WindowsNative:
                 3: (keyboard_input(0x11, 0x0002),),
             }.get(paste_sent, ())
             if key_releases:
-                releases = (Input * len(key_releases))(*key_releases)
-                user32.SendInput(len(releases), releases, ctypes.sizeof(Input))
+                drain_key_releases(*key_releases)
             return False
         if not self.is_foreground(native_handle):
             return False
-        enter = (Input * 2)(
+        enter = (
             keyboard_input(0x0D),  # VK_RETURN
             keyboard_input(0x0D, 0x0002),  # KEYEVENTF_KEYUP
         )
-        return user32.SendInput(len(enter), enter, ctypes.sizeof(Input)) == len(enter)
+        enter_sent = send_inputs(*enter)
+        if enter_sent != len(enter):
+            if enter_sent == 1:
+                drain_key_releases(keyboard_input(0x0D, 0x0002))
+            return False
+        return True
 
     @staticmethod
     def _set_clipboard_text(text: str) -> None:

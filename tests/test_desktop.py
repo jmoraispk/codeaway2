@@ -552,16 +552,84 @@ def test_native_send_input_pastes_then_submits_once(monkeypatch):
     ]
 
 
-def test_native_partial_paste_input_does_not_submit(monkeypatch):
-    batches = _capture_send_input(monkeypatch, [3, 1])
+@pytest.mark.parametrize(
+    ("results", "expected_batches"),
+    [
+        ([0], [[(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)]]),
+        (
+            [1, 0],
+            [
+                [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
+                [(1, 0x11, 2)],
+            ],
+        ),
+        (
+            [2, 0, 1],
+            [
+                [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
+                [(1, 0x56, 2)],
+                [(1, 0x11, 2)],
+            ],
+        ),
+        (
+            [3, 0],
+            [
+                [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
+                [(1, 0x11, 2)],
+            ],
+        ),
+    ],
+)
+def test_native_partial_paste_input_does_not_submit(
+    monkeypatch, results, expected_batches
+):
+    batches = _capture_send_input(monkeypatch, results)
     native = _WindowsNative()
     monkeypatch.setattr(native, "is_foreground", lambda _: True)
 
     assert native.send_paste_and_submit(10) is False
-    assert batches == [
-        [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
-        [(1, 0x11, 2)],
-    ]
+    assert batches == expected_batches
+
+
+@pytest.mark.parametrize(
+    ("results", "expected_batches"),
+    [
+        (
+            [4, 0],
+            [
+                [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
+                [(1, 0x0D, 0), (1, 0x0D, 2)],
+            ],
+        ),
+        (
+            [4, 1, 0],
+            [
+                [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
+                [(1, 0x0D, 0), (1, 0x0D, 2)],
+                [(1, 0x0D, 2)],
+            ],
+        ),
+    ],
+)
+def test_native_partial_enter_input_releases_enter(
+    monkeypatch, results, expected_batches
+):
+    batches = _capture_send_input(monkeypatch, results)
+    native = _WindowsNative()
+    foreground = iter([True, True])
+    monkeypatch.setattr(native, "is_foreground", lambda _: next(foreground))
+
+    assert native.send_paste_and_submit(10) is False
+    assert batches == expected_batches
+
+
+def test_paste_input_failure_reports_neutral_error(monkeypatch, native, desktop_window):
+    native.foreground_handle = desktop_window.native_handle
+    monkeypatch.setattr(desktop_module, "_pin_thread_v2_dpi", lambda: True)
+    monkeypatch.setattr(native, "send_paste_and_submit", lambda _: False)
+
+    with pytest.raises(InputUnavailable, match="input injection failed"):
+        WindowsDesktop(native).paste_and_submit(desktop_window, PixelPoint(13, 14), "hello")
 
 
 def test_native_foreground_loss_after_paste_does_not_submit(monkeypatch):
