@@ -97,11 +97,16 @@ input { accent-color: #263f77; }
 }
 .screenshot-stage img { display: block; width: 100%; height: auto; }
 .region-overlays { position: absolute; inset: 0; pointer-events: none; }
-.region-overlay { position: absolute; border: 2px solid; background: color-mix(in srgb, currentColor 14%, transparent); }
-.region-overlay span { position: absolute; top: 0; left: 0; padding: .1rem .3rem; background: currentColor; color: #fff; font-size: .72rem; font-weight: 700; }
-.region-overlay.sidebar { color: #4666a9; }
-.region-overlay.conversation { color: #46765b; }
-.region-overlay.composer { color: #a26331; }
+.region-overlay {
+  --region-color: #4666a9;
+  position: absolute;
+  border: 2px solid var(--region-color);
+  background: color-mix(in srgb, var(--region-color) 12%, transparent);
+}
+.region-overlay span { position: absolute; top: 0; left: 0; padding: .1rem .3rem; background: var(--region-color); color: #fff; font-size: .72rem; font-weight: 700; }
+.region-overlay--sidebar { --region-color: #4666a9; }
+.region-overlay--conversation { --region-color: #46765b; }
+.region-overlay--composer { --region-color: #a26331; }
 .region-overlay.selected { box-shadow: 0 0 0 2px #17191d; }
 #save-calibration { margin-top: 1rem; }
 .complete { margin: 1rem 0 0; color: #1b5f35; font-weight: 600; }

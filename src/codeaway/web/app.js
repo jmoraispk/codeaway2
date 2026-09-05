@@ -499,7 +499,7 @@ function initializeSetup({ documentRef = document, fetchFn = fetch } = {}) {
       const surface = name === active && drawing ? drawing : state.surfaces[name];
       if (!surface) continue;
       const overlay = documentRef.createElement("div");
-      overlay.className = `region-overlay ${name}${name === active ? " selected" : ""}`;
+      overlay.className = `region-overlay region-overlay--${name}${name === active ? " selected" : ""}`;
       overlay.style.left = `${surface.x * 100}%`;
       overlay.style.top = `${surface.y * 100}%`;
       overlay.style.width = `${surface.width * 100}%`;

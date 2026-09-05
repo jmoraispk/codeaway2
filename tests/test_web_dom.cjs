@@ -232,6 +232,36 @@ test("setup preserves current calibration without selecting another window", asy
   assert.equal(calls.some((call) => call.path === "/api/select"), false);
 });
 
+test("setup overlay classes do not collide with phone panel classes", async () => {
+  const documentRef = setupDocument();
+  const fetchFn = async (path) => {
+    if (path === "/api/status") {
+      return response({ bind_ip: "127.0.0.1", port: 8765, revision: 3 });
+    }
+    if (path === "/api/windows") {
+      return response({
+        windows: [{
+          agent_id: "codex", current: true, id: "current", process_path: "C:/Codex.exe",
+          surfaces: savedSurfaces, title: "Current Codex",
+        }],
+      });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const setup = initializeSetup({ documentRef, fetchFn });
+  await setup.ready;
+
+  const classes = documentRef.elements["region-overlays"].children.map(
+    (overlay) => overlay.className.split(" "),
+  );
+  assert.deepEqual(classes, [
+    ["region-overlay", "region-overlay--sidebar", "selected"],
+    ["region-overlay", "region-overlay--conversation"],
+    ["region-overlay", "region-overlay--composer"],
+  ]);
+});
+
 test("setup refresh button retries discovery without reloading the page", async () => {
   const documentRef = setupDocument();
   let discoveryCount = 0;
