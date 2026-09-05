@@ -184,6 +184,7 @@ class WindowsDesktop:
         ]
 
     def activate(self, window: DesktopWindow) -> bool:
+        _pin_thread_v2_dpi()
         return self._native.activate(window.native_handle)
 
     def is_foreground(self, window: DesktopWindow) -> bool:
@@ -239,6 +240,7 @@ class WindowsDesktop:
             raise InputUnavailable("the exact target window is not foreground")
 
     def click(self, window: DesktopWindow, point: PixelPoint) -> None:
+        _pin_thread_v2_dpi()
         self._require_foreground(window)
         if not self._native.click(window.native_handle, point.x, point.y):
             raise InputUnavailable(
@@ -248,6 +250,7 @@ class WindowsDesktop:
     def scroll(
         self, window: DesktopWindow, point: PixelPoint, amount: int
     ) -> None:
+        _pin_thread_v2_dpi()
         self._require_foreground(window)
         if not self._native.scroll(
             window.native_handle, point.x, point.y, amount * 40
@@ -338,8 +341,6 @@ class _WindowsNative:
         user32.GetForegroundWindow.restype = ctypes.c_void_p
         if not user32.IsWindow(native_handle):
             return False
-        user32.ShowWindow(native_handle, 9)  # SW_RESTORE
-        user32.ShowWindow(native_handle, 5)  # SW_SHOW
         foreground_handle = user32.GetForegroundWindow()
         foreground_thread = wintypes.DWORD()
         if foreground_handle:

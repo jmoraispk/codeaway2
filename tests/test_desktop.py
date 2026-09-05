@@ -20,6 +20,56 @@ from codeaway.desktop import (
 )
 
 
+class Win32Function:
+    def __init__(self, callback):
+        self.callback = callback
+        self.restype = None
+
+    def __call__(self, *args):
+        return self.callback(*args)
+
+
+def mock_native_activation(monkeypatch, foreground_handle, show_window=None):
+    calls = []
+
+    def thread_id(native_handle, thread_pointer):
+        ctypes.cast(thread_pointer, ctypes.POINTER(ctypes.c_ulong))[0] = 77
+        return 77
+
+    def attach(first_thread, second_thread, attach):
+        calls.append(("AttachThreadInput", first_thread, second_thread, attach))
+        return True
+
+    def set_foreground(native_handle):
+        calls.append(("SetForegroundWindow", native_handle))
+        return True
+
+    def show(native_handle, command):
+        calls.append(("ShowWindow", native_handle, command))
+        if show_window is not None:
+            show_window()
+        return True
+
+    user32 = SimpleNamespace(
+        IsWindow=Win32Function(lambda native_handle: native_handle == 10),
+        GetForegroundWindow=Win32Function(lambda: foreground_handle),
+        GetWindowThreadProcessId=Win32Function(thread_id),
+        AttachThreadInput=Win32Function(attach),
+        SetForegroundWindow=Win32Function(set_foreground),
+        ShowWindow=Win32Function(show),
+    )
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        SimpleNamespace(
+            user32=user32,
+            kernel32=SimpleNamespace(GetCurrentThreadId=lambda: 77),
+        ),
+        raising=False,
+    )
+    return calls
+
+
 @dataclass
 class FakeWindowsNative:
     windows: list[_NativeWindow] = field(default_factory=list)
@@ -100,6 +150,57 @@ def test_input_stops_when_exact_window_cannot_be_activated(native, desktop_windo
 
     assert desktop.activate(desktop_window) is False
     assert native.input_calls == []
+
+
+def test_activation_and_coordinate_input_pin_dpi_before_native_operations(
+    monkeypatch, native, desktop_window
+):
+    events = []
+
+    monkeypatch.setattr(
+        desktop_module,
+        "_pin_thread_v2_dpi",
+        lambda: events.append("dpi") or True,
+    )
+    monkeypatch.setattr(
+        native,
+        "activate",
+        lambda native_handle: events.append(("activate", native_handle)) or True,
+    )
+    monkeypatch.setattr(
+        native,
+        "is_foreground",
+        lambda native_handle: events.append(("foreground", native_handle)) or True,
+    )
+    monkeypatch.setattr(
+        native,
+        "click",
+        lambda native_handle, x, y: events.append(("click", native_handle, x, y)) or True,
+    )
+    monkeypatch.setattr(
+        native,
+        "scroll",
+        lambda native_handle, x, y, amount: events.append(
+            ("scroll", native_handle, x, y, amount)
+        )
+        or True,
+    )
+
+    desktop = WindowsDesktop(native)
+    assert desktop.activate(desktop_window) is True
+    desktop.click(desktop_window, PixelPoint(2560, 100))
+    desktop.scroll(desktop_window, PixelPoint(2560, 100), -3)
+
+    assert events == [
+        "dpi",
+        ("activate", 10),
+        "dpi",
+        ("foreground", 10),
+        ("click", 10, 2560, 100),
+        "dpi",
+        ("foreground", 10),
+        ("scroll", 10, 2560, 100, -120),
+    ]
 
 
 def test_scroll_uses_forty_units_per_logical_step(native):
@@ -311,6 +412,39 @@ def test_native_cursor_placement_failure_emits_no_mouse_event(monkeypatch):
 
     assert native.click(10, 11, 12) is False
     assert mouse_events == []
+
+
+def test_native_activation_does_not_restore_or_move_visible_window(monkeypatch):
+    region = [PixelRegion(2560, 0, 2560, 2076)]
+    calls = mock_native_activation(
+        monkeypatch,
+        10,
+        lambda: region.__setitem__(0, PixelRegion(2000, 35, 2762, 2079)),
+    )
+
+    assert _WindowsNative().activate(10) is True
+    assert calls == [("SetForegroundWindow", 10)]
+    assert region[0] == PixelRegion(2560, 0, 2560, 2076)
+
+
+def test_native_activation_rejects_a_different_foreground_window(monkeypatch):
+    mock_native_activation(monkeypatch, 11)
+
+    assert _WindowsNative().activate(10) is False
+
+
+def test_native_send_pastes_then_submits_once(monkeypatch):
+    keys = []
+    native = _WindowsNative()
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "uiautomation",
+        SimpleNamespace(SendKeys=lambda value: keys.append(value)),
+    )
+    monkeypatch.setattr(native, "is_foreground", lambda native_handle: native_handle == 10)
+
+    assert native.send_paste_and_submit(10) is True
+    assert keys == ["{Ctrl}v{Enter}"]
 
 
 def test_native_capabilities_read_expand_collapse_pattern_state():
