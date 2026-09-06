@@ -362,6 +362,34 @@ class CodexAgent:
                 composers.add(node.stable_id)
         return frozenset(selected), frozenset(headers), frozenset(composers)
 
+    def _new_chat_action(
+        self, row: _ProjectRow, nodes: list[AccessibilityNode]
+    ) -> AccessibilityNode | None:
+        actions = [
+            node
+            for node in nodes
+            if node.name == f"Start new chat in {row.name}"
+            and self._same_row(row.node, node)
+            and AccessibilityAction.INVOKE in node.actions
+            and node.region.width > 0
+            and node.region.height > 0
+        ]
+        return actions[0] if len(actions) == 1 else None
+
+    def _connected_marker_occupies_action_slot(
+        self,
+        row: _ProjectRow,
+        action: AccessibilityNode,
+        nodes: list[AccessibilityNode],
+    ) -> bool:
+        return any(
+            node.role.casefold() in {"image", "imagecontrol"}
+            and node.name == "Connected"
+            and self._same_row(row.node, node)
+            and self._overlaps_region(node, action.region)
+            for node in nodes
+        )
+
     def _wait_for_tree(
         self,
         desktop: DesktopBackend,
@@ -605,22 +633,33 @@ class CodexAgent:
         self._activate(desktop, target)
         nodes = desktop.accessibility_tree(target.window)
         row = self._project_row(nodes, project, host)
-        action = next(
-            (
-                node
-                for node in nodes
-                if node.name == f"Start new chat in {row.name}"
-                and self._same_row(row.node, node)
-                and AccessibilityAction.INVOKE in node.actions
-            ),
-            None,
-        )
+        action = self._new_chat_action(row, nodes)
         if action is None:
             raise TargetUnavailable(f"new chat action for {project!r} is unavailable")
         before_transition = self._new_chat_fingerprint(nodes, target)
         if before_transition is None:
             raise TargetUnavailable(f"new chat state for {project!r} is unavailable")
-        desktop.accessibility_action(action, AccessibilityAction.INVOKE)
+        desktop.move(target.window, action.region.center)
+
+        def hover_ready(hover_nodes: list[AccessibilityNode]):
+            try:
+                hover_row = self._project_row(hover_nodes, project, host)
+            except TargetUnavailable:
+                return None
+            hover_action = self._new_chat_action(hover_row, hover_nodes)
+            if hover_action is None or self._connected_marker_occupies_action_slot(
+                hover_row, hover_action, hover_nodes
+            ):
+                return None
+            return hover_action
+
+        action = self._wait_for_tree(
+            desktop,
+            target,
+            hover_ready,
+            f"new chat action for {project!r} is unavailable after hover",
+        )
+        desktop.click(target.window, action.region.center)
         composer = target.surfaces.composer.resolve(target.window.region)
 
         def new_chat_ready(post_action_nodes: list[AccessibilityNode]):

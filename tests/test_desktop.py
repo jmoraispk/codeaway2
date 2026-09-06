@@ -79,6 +79,7 @@ class FakeWindowsNative:
     activate_result: bool = True
     foreground_handle: int | None = None
     foreground_results: list[bool] = field(default_factory=list)
+    move_result: bool = True
     click_result: bool = True
     input_calls: list[tuple[object, ...]] = field(default_factory=list)
     wheel_calls: list[tuple[int, int, int]] = field(default_factory=list)
@@ -114,6 +115,10 @@ class FakeWindowsNative:
     def click(self, native_handle, x, y):
         self.input_calls.append(("click", native_handle, x, y))
         return self.click_result
+
+    def move(self, native_handle, x, y):
+        self.input_calls.append(("move", native_handle, x, y))
+        return self.move_result
 
     def scroll(self, native_handle, x, y, wheel_data):
         self.wheel_calls.append((native_handle, x, y, wheel_data))
@@ -459,6 +464,28 @@ def test_click_and_paste_submit_recheck_the_target_at_each_input_boundary(
         ("send_paste_and_submit", 10),
     ]
     assert native.clipboard_values == ["hello"]
+
+
+def test_move_only_positions_the_cursor_without_clicking(native, desktop_window):
+    native.foreground_handle = desktop_window.native_handle
+    desktop = WindowsDesktop(native)
+
+    desktop.move(desktop_window, PixelPoint(2560, 100))
+
+    assert native.input_calls == [("move", 10, 2560, 100)]
+
+
+def test_move_aborts_when_native_cursor_placement_or_foreground_validation_fails(
+    native, desktop_window
+):
+    native.foreground_handle = desktop_window.native_handle
+    native.move_result = False
+    desktop = WindowsDesktop(native)
+
+    with pytest.raises(InputUnavailable, match="cursor"):
+        desktop.move(desktop_window, PixelPoint(2560, 100))
+
+    assert native.input_calls == [("move", 10, 2560, 100)]
 
 
 def test_replace_and_submit_selects_the_existing_text_before_pasting(

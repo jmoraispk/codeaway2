@@ -210,6 +210,9 @@ class ActionDesktop:
         self.last_click = point
         self.calls.append(("click", window, point))
 
+    def move(self, window, point):
+        self.calls.append(("move", window, point))
+
     def scroll(self, window, point, amount):
         self.calls.append(("scroll", window, point, amount))
 
@@ -690,18 +693,29 @@ def test_task_navigation_invokes_the_task_under_the_named_project(
     )
 
 
-def test_create_chat_invokes_the_project_action_then_submits_the_prompt(
+def test_create_chat_moves_before_clicking_the_fresh_hover_action(
     fake_desktop, codex_target
 ):
-    new_chat = next(node for node in fake_desktop.nodes if node.id == "new-chat")
+    initial_action = replace(
+        next(node for node in fake_desktop.nodes if node.id == "new-chat"),
+        region=PixelRegion(370, 50, 30, 30),
+    )
+    initial = tuple(
+        initial_action if node.id == "new-chat" else node for node in fake_desktop.nodes
+    )
+    hovered_action = replace(initial_action, id="hovered-new-chat", region=PixelRegion(340, 50, 30, 30))
     composer = AccessibilityNode(
         "composer", "EditControl", "Message", "", PixelRegion(450, 650, 300, 30), stable_id="runtime:composer"
     )
     ready = tuple(
         replace(node, class_name=node.class_name.replace(" bg-primary-ghost-hover", ""))
-        for node in fake_desktop.nodes
+        if node.id != "new-chat"
+        else hovered_action
+        for node in initial
     ) + (composer,)
-    fake_desktop = StagedActionDesktop(fake_desktop.nodes, stages=(fake_desktop.nodes, ready))
+    fake_desktop = StagedActionDesktop(initial, stages=(initial, (hovered_action,) + tuple(
+        node for node in initial if node.id not in {"new-chat", "connected"}
+    ), ready))
 
     CodexAgent().create_chat(
         fake_desktop,
@@ -714,7 +728,9 @@ def test_create_chat_invokes_the_project_action_then_submits_the_prompt(
     assert fake_desktop.calls == [
         ("activate", codex_target.window),
         ("accessibility_tree", codex_target.window),
-        ("accessibility_action", new_chat, AccessibilityAction.INVOKE),
+        ("move", codex_target.window, PixelPoint(385, 65)),
+        ("accessibility_tree", codex_target.window),
+        ("click", codex_target.window, PixelPoint(355, 65)),
         ("accessibility_tree", codex_target.window),
         (
             "paste_and_submit",
@@ -722,6 +738,63 @@ def test_create_chat_invokes_the_project_action_then_submits_the_prompt(
             PixelPoint(700, 659),
             "Investigate the regression",
         ),
+    ]
+
+
+def test_create_chat_requires_the_connected_marker_to_clear_the_hover_action_slot(
+    monkeypatch, fake_desktop, codex_target
+):
+    initial_action = replace(
+        next(node for node in fake_desktop.nodes if node.id == "new-chat"),
+        region=PixelRegion(370, 50, 30, 30),
+    )
+    initial = tuple(
+        initial_action if node.id == "new-chat" else node for node in fake_desktop.nodes
+    )
+    hovered_action = replace(initial_action, id="hovered-new-chat")
+    still_connected = replace(
+        next(node for node in initial if node.id == "connected"), region=PixelRegion(372, 50, 16, 30)
+    )
+    unsafe_hover = tuple(
+        hovered_action if node.id == "new-chat" else still_connected if node.id == "connected" else node
+        for node in initial
+    )
+    desktop = StagedActionDesktop(initial, stages=(initial, unsafe_hover))
+    clock = iter((0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().create_chat(
+            desktop, codex_target, project="SummonLab", host="private_3", text="Do not send"
+        )
+
+    assert desktop.calls == [
+        ("activate", codex_target.window),
+        ("accessibility_tree", codex_target.window),
+        ("move", codex_target.window, PixelPoint(385, 65)),
+        ("accessibility_tree", codex_target.window),
+    ]
+
+
+def test_create_chat_fails_without_a_fresh_visible_hover_action(
+    monkeypatch, fake_desktop, codex_target
+):
+    initial = tuple(node for node in fake_desktop.nodes if node.id != "connected")
+    no_hover_action = tuple(node for node in initial if node.id != "new-chat")
+    desktop = StagedActionDesktop(initial, stages=(initial, no_hover_action))
+    clock = iter((0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().create_chat(
+            desktop, codex_target, project="SummonLab", host="private_3", text="Do not send"
+        )
+
+    assert desktop.calls == [
+        ("activate", codex_target.window),
+        ("accessibility_tree", codex_target.window),
+        ("move", codex_target.window, PixelPoint(355, 65)),
+        ("accessibility_tree", codex_target.window),
     ]
 
 
@@ -888,7 +961,7 @@ def test_create_chat_rejects_an_unchanged_selected_task_in_another_project(
         node("composer", "EditControl", "Message", "", PixelRegion(450, 650, 300, 30), stable_id="runtime:composer"),
     )
     desktop = StagedActionDesktop(nodes, stages=(nodes, nodes))
-    clock = iter((0.0, 1.0))
+    clock = iter((0.0, 0.0, 1.0))
     monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
 
     with pytest.raises(TargetUnavailable):
@@ -927,7 +1000,7 @@ def test_create_chat_timeout_never_types_into_the_previous_chat(
     monkeypatch, navigator_nodes, codex_target
 ):
     desktop = StagedActionDesktop(navigator_nodes, stages=(navigator_nodes, navigator_nodes))
-    clock = iter((0.0, 1.0))
+    clock = iter((0.0, 0.0, 1.0))
     monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
 
     with pytest.raises(TargetUnavailable):
@@ -952,7 +1025,7 @@ def test_create_chat_rejects_a_transition_that_keeps_the_previous_selection(
     desktop = StagedActionDesktop(
         navigator_nodes, stages=(navigator_nodes, old_and_new_selected)
     )
-    clock = iter((0.0, 1.0))
+    clock = iter((0.0, 0.0, 1.0))
     monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
 
     with pytest.raises(TargetUnavailable):

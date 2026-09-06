@@ -128,6 +128,8 @@ class DesktopBackend(Protocol):
         self, node: AccessibilityNode, action: AccessibilityAction
     ) -> None: ...
 
+    def move(self, window: DesktopWindow, point: PixelPoint) -> None: ...
+
     def click(self, window: DesktopWindow, point: PixelPoint) -> None: ...
 
     def scroll(
@@ -246,6 +248,15 @@ class WindowsDesktop:
     def _require_foreground(self, window: DesktopWindow) -> None:
         if not self._native.is_foreground(window.native_handle):
             raise InputUnavailable("the exact target window is not foreground")
+
+    def move(self, window: DesktopWindow, point: PixelPoint) -> None:
+        if not _pin_thread_v2_dpi():
+            raise InputUnavailable("physical DPI coordinate context is unavailable")
+        self._require_foreground(window)
+        if not self._native.move(window.native_handle, point.x, point.y):
+            raise InputUnavailable(
+                "cursor placement or foreground validation failed"
+            )
 
     def click(self, window: DesktopWindow, point: PixelPoint) -> None:
         if not _pin_thread_v2_dpi():
@@ -530,6 +541,12 @@ class _WindowsNative:
         user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
         user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
         return True
+
+    def move(self, native_handle: int, x: int, y: int) -> bool:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        return bool(user32.SetCursorPos(x, y) and self.is_foreground(native_handle))
 
     def scroll(self, native_handle: int, x: int, y: int, wheel_data: int) -> bool:
         import ctypes
