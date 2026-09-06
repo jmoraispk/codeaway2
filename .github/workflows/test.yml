@@ -34,4 +34,10 @@ jobs:
         run: uv build
 
       - name: Install wheel in a clean environment and run the command
-        run: uv run --isolated --no-project --with ./dist/codeaway-0.1.0-py3-none-any.whl codeaway --help
+        shell: pwsh
+        run: |
+          $wheels = @(Get-ChildItem -Path dist -Filter *.whl -File)
+          if ($wheels.Count -ne 1) {
+            throw "Expected exactly one wheel in dist/, found $($wheels.Count)."
+          }
+          uv run --isolated --no-project --with $wheels[0].FullName codeaway --help
