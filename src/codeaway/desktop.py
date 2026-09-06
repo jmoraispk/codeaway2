@@ -140,10 +140,6 @@ class DesktopBackend(Protocol):
         self, window: DesktopWindow, point: PixelPoint, text: str
     ) -> None: ...
 
-    def replace_and_submit(
-        self, window: DesktopWindow, point: PixelPoint, text: str
-    ) -> None: ...
-
 
 @dataclass(frozen=True)
 class _NativeWindow:
@@ -287,15 +283,6 @@ class WindowsDesktop:
         self._native.set_clipboard_text(text)
         self._require_foreground(window)
         if not self._native.send_paste_and_submit(window.native_handle):
-            raise InputUnavailable("input injection failed")
-
-    def replace_and_submit(
-        self, window: DesktopWindow, point: PixelPoint, text: str
-    ) -> None:
-        self.click(window, point)
-        self._native.set_clipboard_text(text)
-        self._require_foreground(window)
-        if not self._native.send_replace_and_submit(window.native_handle):
             raise InputUnavailable("input injection failed")
 
 
@@ -561,12 +548,9 @@ class _WindowsNative:
         self._set_clipboard_text(text)
 
     def send_paste_and_submit(self, native_handle: int) -> bool:
-        return self._send_paste_and_submit(native_handle, replace=False)
+        return self._send_paste_and_submit(native_handle)
 
-    def send_replace_and_submit(self, native_handle: int) -> bool:
-        return self._send_paste_and_submit(native_handle, replace=True)
-
-    def _send_paste_and_submit(self, native_handle: int, *, replace: bool) -> bool:
+    def _send_paste_and_submit(self, native_handle: int) -> bool:
         import ctypes
         from ctypes import wintypes
 
@@ -640,8 +624,6 @@ class _WindowsNative:
                 drain_key_releases(*key_releases)
             return False
 
-        if replace and not send_control_shortcut(0x41):  # VK_A
-            return False
         if not send_control_shortcut(0x56):  # VK_V
             return False
         if not self.is_foreground(native_handle):

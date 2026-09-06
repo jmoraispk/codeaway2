@@ -365,18 +365,19 @@ class CodexAgent:
         self,
         row: _ProjectRow,
         nodes: list[AccessibilityNode],
-        window_region,
+        target: AgentTarget,
     ) -> AccessibilityNode | None:
+        sidebar = target.surfaces.sidebar.resolve(target.window.region)
         actions = [
             node
             for node in nodes
             if node.name == f"Start new chat in {row.name}"
-            and self._same_row(row.node, node)
-            and self._overlaps_horizontally(row.node, node)
             and AccessibilityAction.INVOKE in node.actions
             and node.region.width > 0
             and node.region.height > 0
-            and self._is_within_region(node, window_region)
+            and self._is_within_region(node, row.node.region)
+            and self._is_within_region(node, sidebar)
+            and self._is_within_region(node, target.window.region)
         ]
         return actions[0] if len(actions) == 1 else None
 
@@ -601,7 +602,7 @@ class CodexAgent:
         self._activate(desktop, target)
         nodes = desktop.accessibility_tree(target.window)
         row = self._project_row(nodes, project, host)
-        action = self._new_chat_action(row, nodes, target.window.region)
+        action = self._new_chat_action(row, nodes, target)
         if action is None:
             raise TargetUnavailable(f"new chat action for {project!r} is unavailable")
         before_transition = self._new_chat_fingerprint(nodes, target)
@@ -614,9 +615,7 @@ class CodexAgent:
                 hover_row = self._project_row(hover_nodes, project, host)
             except TargetUnavailable:
                 return None
-            hover_action = self._new_chat_action(
-                hover_row, hover_nodes, target.window.region
-            )
+            hover_action = self._new_chat_action(hover_row, hover_nodes, target)
             if hover_action is None or self._connected_marker_occupies_action_slot(
                 hover_row, hover_action, hover_nodes
             ):

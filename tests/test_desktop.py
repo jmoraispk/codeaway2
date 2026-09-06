@@ -131,10 +131,6 @@ class FakeWindowsNative:
         self.input_calls.append(("send_paste_and_submit", native_handle))
         return True
 
-    def send_replace_and_submit(self, native_handle):
-        self.input_calls.append(("send_replace_and_submit", native_handle))
-        return True
-
 
 @pytest.fixture
 def native():
@@ -488,21 +484,6 @@ def test_move_aborts_when_native_cursor_placement_or_foreground_validation_fails
     assert native.input_calls == [("move", 10, 2560, 100)]
 
 
-def test_replace_and_submit_selects_the_existing_text_before_pasting(
-    native, desktop_window
-):
-    native.foreground_handle = desktop_window.native_handle
-    desktop = WindowsDesktop(native)
-
-    desktop.replace_and_submit(desktop_window, PixelPoint(13, 14), "New title")
-
-    assert native.input_calls == [
-        ("click", 10, 13, 14),
-        ("send_replace_and_submit", 10),
-    ]
-    assert native.clipboard_values == ["New title"]
-
-
 def test_focus_loss_after_composer_click_prevents_keyboard_injection(
     native, desktop_window
 ):
@@ -684,20 +665,6 @@ def test_native_send_input_pastes_then_submits_once(monkeypatch):
 
     assert native.send_paste_and_submit(10) is True
     assert batches == [
-        [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
-        [(1, 0x0D, 0), (1, 0x0D, 2)],
-    ]
-
-
-def test_native_send_input_selects_all_pastes_then_submits(monkeypatch):
-    batches = _capture_send_input(monkeypatch, [4, 4, 2])
-    native = _WindowsNative()
-    foreground = iter([True, True, True])
-    monkeypatch.setattr(native, "is_foreground", lambda _: next(foreground))
-
-    assert native.send_replace_and_submit(10) is True
-    assert batches == [
-        [(1, 0x11, 0), (1, 0x41, 0), (1, 0x41, 2), (1, 0x11, 2)],
         [(1, 0x11, 0), (1, 0x56, 0), (1, 0x56, 2), (1, 0x11, 2)],
         [(1, 0x0D, 0), (1, 0x0D, 2)],
     ]

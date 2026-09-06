@@ -781,6 +781,18 @@ def test_create_chat_fails_without_a_fresh_visible_hover_action(
     ("row_region", "action_region", "stable_id"),
     [
         (PixelRegion(100, 50, 200, 30), PixelRegion(340, 50, 30, 30), None),
+        pytest.param(
+            PixelRegion(100, 50, 300, 30),
+            PixelRegion(399, 50, 700, 30),
+            None,
+            id="horizontal-one-pixel-overlap",
+        ),
+        pytest.param(
+            PixelRegion(100, 50, 300, 30),
+            PixelRegion(340, 79, 30, 670),
+            None,
+            id="vertical-one-pixel-overlap",
+        ),
         (PixelRegion(100, 50, 300, 30), PixelRegion(1100, 50, 30, 30), "runtime:offscreen"),
     ],
 )
