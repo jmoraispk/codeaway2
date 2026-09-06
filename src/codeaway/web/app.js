@@ -173,6 +173,7 @@ function initializePhoneWorkspace({
     navigator: null,
     pollTimer: null,
     refreshing: null,
+    renamingTask: null,
     revision: null,
   };
 
@@ -349,6 +350,9 @@ function initializePhoneWorkspace({
       tasks.className = "task-list";
       tasks.hidden = !expanded;
       for (const task of project.tasks) {
+        const taskKey = `${projectKey}\u0000${task.title}`;
+        const taskRow = documentRef.createElement("div");
+        taskRow.className = "task-row";
         const taskButton = documentRef.createElement("button");
         taskButton.className = "task";
         taskButton.type = "button";
@@ -370,13 +374,77 @@ function initializePhoneWorkspace({
         taskButton.addEventListener("click", async () => {
           if (state.actionBusy) return;
           try {
-            await performAction({ kind: "navigate", target: "task", project: project.name, title: task.title });
+            await performAction({
+              kind: "navigate",
+              target: "task",
+              project: project.name,
+              host: project.host || null,
+              title: task.title,
+            });
             showMessage(elements.conversationMessage, "");
           } catch (error) {
             showMessage(elements.conversationMessage, error.message, true);
           }
         });
-        tasks.append(taskButton);
+        const renameButton = documentRef.createElement("button");
+        renameButton.className = "task-rename";
+        renameButton.type = "button";
+        renameButton.setAttribute("aria-label", `Rename ${task.title}`);
+        renameButton.append(svgIcon(
+          "task-rename-icon",
+          "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z",
+        ));
+        renameButton.addEventListener("click", () => {
+          state.renamingTask = taskKey;
+          renderNavigator(state.navigator);
+        });
+        taskRow.append(taskButton, renameButton);
+
+        if (state.renamingTask === taskKey) {
+          const form = documentRef.createElement("form");
+          form.className = "inline-editor rename-chat-form";
+          const input = documentRef.createElement("input");
+          input.type = "text";
+          input.value = task.title;
+          input.setAttribute("aria-label", `New title for ${task.title}`);
+          const submit = documentRef.createElement("button");
+          submit.type = "submit";
+          submit.textContent = "Rename";
+          const cancel = documentRef.createElement("button");
+          cancel.type = "button";
+          cancel.className = "secondary";
+          cancel.textContent = "Cancel";
+          cancel.addEventListener("click", () => {
+            state.renamingTask = null;
+            renderNavigator(state.navigator);
+          });
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const newTitle = input.value.trim();
+            if (!newTitle || newTitle === task.title || state.actionBusy) return;
+            submit.disabled = true;
+            cancel.disabled = true;
+            try {
+              await performAction({
+                kind: "rename_chat",
+                project: project.name,
+                host: project.host || null,
+                title: task.title,
+                new_title: newTitle,
+              });
+              state.renamingTask = null;
+              renderNavigator(state.navigator);
+              showMessage(elements.conversationMessage, "Chat renamed. Waiting for Codex to refresh it…");
+            } catch (error) {
+              showMessage(elements.conversationMessage, error.message, true);
+              submit.disabled = false;
+              cancel.disabled = false;
+            }
+          });
+          form.append(input, submit, cancel);
+          taskRow.append(form);
+        }
+        tasks.append(taskRow);
       }
       projectItem.append(tasks);
       elements.navigatorProjects.append(projectItem);

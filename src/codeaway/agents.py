@@ -61,6 +61,7 @@ class AgentSnapshot:
 class NavigationAction:
     kind: Literal["project", "task"]
     project: str
+    host: str | None = None
     title: str | None = None
     expanded: bool | None = None
 
@@ -100,6 +101,16 @@ class AgentBackend(Protocol):
         project: str,
         host: str | None,
         text: str,
+    ) -> None: ...
+
+    def rename_chat(
+        self,
+        desktop: DesktopBackend,
+        target: AgentTarget,
+        project: str,
+        host: str | None,
+        title: str,
+        new_title: str,
     ) -> None: ...
 
 
@@ -259,6 +270,21 @@ class CodexAgent:
             rows.append(_ProjectRow(project, name, host, project_tasks))
         return tuple(rows)
 
+    def _project_row(
+        self,
+        nodes: list[AccessibilityNode],
+        project: str,
+        host: str | None,
+    ) -> _ProjectRow:
+        projects = [
+            row
+            for row in self._rows(nodes)
+            if row.name == project and row.host == host
+        ]
+        if len(projects) != 1:
+            raise TargetUnavailable(f"project {project!r} is unavailable")
+        return projects[0]
+
     def _has_class_on_row(
         self,
         task: AccessibilityNode,
@@ -373,10 +399,8 @@ class CodexAgent:
         action: NavigationAction,
     ) -> None:
         self._activate(desktop, target)
-        rows = self._rows(desktop.accessibility_tree(target.window))
-        project = next((row for row in rows if row.name == action.project), None)
-        if project is None:
-            raise TargetUnavailable(f"project {action.project!r} is unavailable")
+        nodes = desktop.accessibility_tree(target.window)
+        project = self._project_row(nodes, action.project, action.host)
         if action.kind == "project":
             if action.expanded is None:
                 raise ValueError("project navigation requires an expanded state")
@@ -445,14 +469,7 @@ class CodexAgent:
     ) -> None:
         self._activate(desktop, target)
         nodes = desktop.accessibility_tree(target.window)
-        projects = [
-            row
-            for row in self._rows(nodes)
-            if row.name == project and row.host == host
-        ]
-        if len(projects) != 1:
-            raise TargetUnavailable(f"project {project!r} is unavailable")
-        row = projects[0]
+        row = self._project_row(nodes, project, host)
         action = next(
             (
                 node
@@ -468,3 +485,55 @@ class CodexAgent:
         desktop.accessibility_action(action, AccessibilityAction.INVOKE)
         composer = target.surfaces.composer.resolve(target.window.region)
         desktop.paste_and_submit(target.window, composer.center, text)
+
+    def rename_chat(
+        self,
+        desktop: DesktopBackend,
+        target: AgentTarget,
+        project: str,
+        host: str | None,
+        title: str,
+        new_title: str,
+    ) -> None:
+        self._activate(desktop, target)
+        nodes = desktop.accessibility_tree(target.window)
+        row = self._project_row(nodes, project, host)
+        task = next((task for task in row.tasks if task.name == title), None)
+        if task is None:
+            raise TargetUnavailable(f"chat {title!r} is unavailable")
+        desktop.accessibility_action(task, AccessibilityAction.INVOKE)
+
+        nodes = desktop.accessibility_tree(target.window)
+        sidebar = target.surfaces.sidebar.resolve(target.window.region)
+        header_bottom = target.window.region.y + max(
+            80, round(target.window.region.height * 0.1)
+        )
+        header = next(
+            (
+                node
+                for node in nodes
+                if node.name == title
+                and node.role.casefold() in {"button", "buttoncontrol"}
+                and AccessibilityAction.INVOKE in node.actions
+                and node.region.x >= sidebar.x + sidebar.width
+                and node.region.y < header_bottom
+            ),
+            None,
+        )
+        if header is None:
+            raise TargetUnavailable(f"title editor for {title!r} is unavailable")
+        desktop.accessibility_action(header, AccessibilityAction.INVOKE)
+        nodes = desktop.accessibility_tree(target.window)
+        editor = next(
+            (
+                node
+                for node in nodes
+                if node.role.casefold() in {"edit", "editcontrol"}
+                and node.region.x >= sidebar.x + sidebar.width
+                and node.region.y < header_bottom
+            ),
+            None,
+        )
+        if editor is None:
+            raise TargetUnavailable(f"title editor for {title!r} is unavailable")
+        desktop.replace_and_submit(target.window, editor.region.center, new_title)

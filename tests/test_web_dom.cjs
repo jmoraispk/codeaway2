@@ -424,7 +424,7 @@ test("phone navigator renders accessible state and worktree icons without status
   assert.equal(deltaMeta.children[0].textContent, "local");
   assertIcon(deltaMeta.children[1], "status-icon status-icon--connected", "Connected");
 
-  const tasks = projects[0].children[1].children;
+  const tasks = projects[0].children[1].children.map((row) => row.children[0]);
   assert.equal(tasks[0].classList.contains("selected"), true);
   assert.equal(tasks[0].children[0].textContent, "Running");
   const runningMeta = tasks[0].children[1];
@@ -497,6 +497,75 @@ test("project action on the right creates a chat from its initial prompt", async
     project: "SummonLab",
     host: "private_3",
     text: "Investigate the regression",
+  }]);
+});
+
+test("task action on the right renames its chat", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const actions = [];
+  const fetchFn = async (path, options = {}) => {
+    if (path === "/api/status") {
+      return response({
+        ready: true,
+        revision: 0,
+        target: { agent_id: "codex", title: "Agent Window" },
+      });
+    }
+    if (path === "/api/navigator") {
+      return response({
+        available: true,
+        projects: [{
+          name: "SummonLab",
+          connected: true,
+          expanded: true,
+          host: "private_3",
+          state: "connected",
+          tasks: [{
+            title: "Old title",
+            state: "unknown",
+            worktree: false,
+            selected: false,
+          }],
+        }],
+      });
+    }
+    if (path === "/api/action") {
+      actions.push(JSON.parse(options.body));
+      return response({ revision: 1 });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+
+  let project = documentRef.elements["navigator-projects"].children[0];
+  let taskRow = project.children.at(-1).children[0];
+  const renameButton = taskRow.children.find(
+    (child) => child.className === "task-rename",
+  );
+  assert.ok(renameButton);
+  assert.equal(renameButton.attributes["aria-label"], "Rename Old title");
+  assert.equal(taskRow.children.at(-1), renameButton);
+
+  await renameButton.emit("click");
+  project = documentRef.elements["navigator-projects"].children[0];
+  taskRow = project.children.at(-1).children[0];
+  const form = taskRow.children.find(
+    (child) => child.className === "inline-editor rename-chat-form",
+  );
+  assert.ok(form);
+  assert.equal(form.children[0].value, "Old title");
+  form.children[0].value = "Clear title";
+  await form.emit("submit");
+
+  assert.deepEqual(actions, [{
+    kind: "rename_chat",
+    project: "SummonLab",
+    host: "private_3",
+    title: "Old title",
+    new_title: "Clear title",
   }]);
 });
 

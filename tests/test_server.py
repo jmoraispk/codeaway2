@@ -95,6 +95,10 @@ class FakeAgent:
         del desktop, target
         self.calls.append(("create_chat", project, host, text))
 
+    def rename_chat(self, desktop, target, project, host, title, new_title):
+        del desktop, target
+        self.calls.append(("rename_chat", project, host, title, new_title))
+
 
 @pytest.fixture
 def selected_window():
@@ -621,6 +625,19 @@ def test_navigate_dispatches_validated_semantic_action(app, body, expected):
     assert app.fake_agent.calls == [("navigate", expected)]
 
 
+def test_task_navigation_preserves_the_project_host_identity(app):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"navigate","target":"task","project":"Project","host":"remote-ssh","title":"Task"}',
+    )
+
+    assert response.status == 200
+    action = app.fake_agent.calls[0][1]
+    assert getattr(action, "host", None) == "remote-ssh"
+
+
 def test_create_chat_dispatches_the_project_identity_and_initial_prompt(app):
     response = app.dispatch(
         "POST",
@@ -631,6 +648,20 @@ def test_create_chat_dispatches_the_project_identity_and_initial_prompt(app):
 
     assert response.status == 200
     assert app.fake_agent.calls == [("create_chat", "Project", None, "Start here")]
+
+
+def test_rename_chat_dispatches_both_titles_and_the_project_identity(app):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"rename_chat","project":"Project","host":null,"title":"Task","new_title":"Clear title"}',
+    )
+
+    assert response.status == 200
+    assert app.fake_agent.calls == [
+        ("rename_chat", "Project", None, "Task", "Clear title")
+    ]
 
 
 def test_navigator_serializes_agent_snapshot(app):

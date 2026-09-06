@@ -137,6 +137,10 @@ class DesktopBackend(Protocol):
         self, window: DesktopWindow, point: PixelPoint, text: str
     ) -> None: ...
 
+    def replace_and_submit(
+        self, window: DesktopWindow, point: PixelPoint, text: str
+    ) -> None: ...
+
 
 @dataclass(frozen=True)
 class _NativeWindow:
@@ -269,6 +273,15 @@ class WindowsDesktop:
         self._native.set_clipboard_text(text)
         self._require_foreground(window)
         if not self._native.send_paste_and_submit(window.native_handle):
+            raise InputUnavailable("input injection failed")
+
+    def replace_and_submit(
+        self, window: DesktopWindow, point: PixelPoint, text: str
+    ) -> None:
+        self.click(window, point)
+        self._native.set_clipboard_text(text)
+        self._require_foreground(window)
+        if not self._native.send_replace_and_submit(window.native_handle):
             raise InputUnavailable("input injection failed")
 
 
@@ -516,6 +529,12 @@ class _WindowsNative:
         self._set_clipboard_text(text)
 
     def send_paste_and_submit(self, native_handle: int) -> bool:
+        return self._send_paste_and_submit(native_handle, replace=False)
+
+    def send_replace_and_submit(self, native_handle: int) -> bool:
+        return self._send_paste_and_submit(native_handle, replace=True)
+
+    def _send_paste_and_submit(self, native_handle: int, *, replace: bool) -> bool:
         import ctypes
         from ctypes import wintypes
 
@@ -551,8 +570,6 @@ class _WindowsNative:
             event.ki = KeyboardInput(virtual_key, 0, flags, 0, 0)
             return event
 
-        if not self.is_foreground(native_handle):
-            return False
         user32 = ctypes.windll.user32
         user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int)
         user32.SendInput.restype = wintypes.UINT
@@ -567,21 +584,33 @@ class _WindowsNative:
                 all_released = send_inputs(release) == 1 and all_released
             return all_released
 
-        paste = (
-            keyboard_input(0x11),  # VK_CONTROL
-            keyboard_input(0x56),  # VK_V
-            keyboard_input(0x56, 0x0002),  # KEYEVENTF_KEYUP
-            keyboard_input(0x11, 0x0002),  # KEYEVENTF_KEYUP
-        )
-        paste_sent = send_inputs(*paste)
-        if paste_sent != len(paste):
+        def send_control_shortcut(virtual_key: int) -> bool:
+            if not self.is_foreground(native_handle):
+                return False
+            shortcut = (
+                keyboard_input(0x11),  # VK_CONTROL
+                keyboard_input(virtual_key),
+                keyboard_input(virtual_key, 0x0002),  # KEYEVENTF_KEYUP
+                keyboard_input(0x11, 0x0002),  # KEYEVENTF_KEYUP
+            )
+            sent = send_inputs(*shortcut)
+            if sent == len(shortcut):
+                return True
             key_releases = {
                 1: (keyboard_input(0x11, 0x0002),),
-                2: (keyboard_input(0x56, 0x0002), keyboard_input(0x11, 0x0002)),
+                2: (
+                    keyboard_input(virtual_key, 0x0002),
+                    keyboard_input(0x11, 0x0002),
+                ),
                 3: (keyboard_input(0x11, 0x0002),),
-            }.get(paste_sent, ())
+            }.get(sent, ())
             if key_releases:
                 drain_key_releases(*key_releases)
+            return False
+
+        if replace and not send_control_shortcut(0x41):  # VK_A
+            return False
+        if not send_control_shortcut(0x56):  # VK_V
             return False
         if not self.is_foreground(native_handle):
             return False

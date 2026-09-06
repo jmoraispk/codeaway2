@@ -140,6 +140,21 @@ def navigator_nodes():
             "sidebar-item py-row-y",
             PixelRegion(350, 122, 20, 28),
         ),
+        AccessibilityNode(
+            "header-title",
+            "Button",
+            "Finished task",
+            "",
+            PixelRegion(450, 65, 240, 30),
+            actions=frozenset({AccessibilityAction.INVOKE}),
+        ),
+        AccessibilityNode(
+            "title-editor",
+            "EditControl",
+            "Chat title",
+            "",
+            PixelRegion(448, 63, 260, 34),
+        ),
     )
 
 
@@ -193,6 +208,9 @@ class ActionDesktop:
 
     def paste_and_submit(self, window, point, text):
         self.calls.append(("paste_and_submit", window, point, text))
+
+    def replace_and_submit(self, window, point, text):
+        self.calls.append(("replace_and_submit", window, point, text))
 
 
 @pytest.fixture
@@ -573,7 +591,9 @@ def test_failed_activation_prevents_every_input(
             agent.navigate(
                 fake_desktop,
                 codex_target,
-                NavigationAction("task", "SummonLab", title="Finished task"),
+                NavigationAction(
+                    "task", "SummonLab", host="private_3", title="Finished task"
+                ),
             )
         elif action_name == "click":
             agent.click(fake_desktop, codex_target, ClickAction("conversation", 0.5, 0.5))
@@ -617,7 +637,9 @@ def test_project_navigation_changes_only_a_different_expansion_state(
     CodexAgent().navigate(
         fake_desktop,
         codex_target,
-        NavigationAction("project", "SummonLab", expanded=requested),
+        NavigationAction(
+            "project", "SummonLab", host="private_3", expanded=requested
+        ),
     )
 
     action_calls = [call for call in fake_desktop.calls if call[0] == "accessibility_action"]
@@ -637,7 +659,9 @@ def test_task_navigation_invokes_the_task_under_the_named_project(
     CodexAgent().navigate(
         fake_desktop,
         codex_target,
-        NavigationAction("task", "SummonLab", title="Finished task"),
+        NavigationAction(
+            "task", "SummonLab", host="private_3", title="Finished task"
+        ),
     )
 
     assert fake_desktop.calls[-1] == (
@@ -669,6 +693,37 @@ def test_create_chat_invokes_the_project_action_then_submits_the_prompt(
             codex_target.window,
             PixelPoint(700, 659),
             "Investigate the regression",
+        ),
+    ]
+
+
+def test_rename_chat_selects_the_task_then_replaces_its_header_title(
+    fake_desktop, codex_target
+):
+    task = next(node for node in fake_desktop.nodes if node.id == "finished")
+    header = next(node for node in fake_desktop.nodes if node.id == "header-title")
+
+    CodexAgent().rename_chat(
+        fake_desktop,
+        codex_target,
+        project="SummonLab",
+        host="private_3",
+        title="Finished task",
+        new_title="Clearer title",
+    )
+
+    assert fake_desktop.calls == [
+        ("activate", codex_target.window),
+        ("accessibility_tree", codex_target.window),
+        ("accessibility_action", task, AccessibilityAction.INVOKE),
+        ("accessibility_tree", codex_target.window),
+        ("accessibility_action", header, AccessibilityAction.INVOKE),
+        ("accessibility_tree", codex_target.window),
+        (
+            "replace_and_submit",
+            codex_target.window,
+            PixelPoint(578, 80),
+            "Clearer title",
         ),
     ]
 

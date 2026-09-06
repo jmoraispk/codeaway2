@@ -528,6 +528,23 @@ class Application:
                 raise ValueError("create_chat requires a nonempty prompt")
             backend.create_chat(self.desktop, target, project, host, text)
             return
+        if kind == "rename_chat":
+            project = value.get("project")
+            host = value.get("host")
+            title = value.get("title")
+            new_title = value.get("new_title")
+            if not isinstance(project, str) or not project.strip():
+                raise ValueError("rename_chat requires a project")
+            if host is not None and not isinstance(host, str):
+                raise ValueError("rename_chat host must be a string or null")
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError("rename_chat requires the current title")
+            if not isinstance(new_title, str) or not new_title.strip():
+                raise ValueError("rename_chat requires a nonempty new title")
+            backend.rename_chat(
+                self.desktop, target, project, host, title, new_title
+            )
+            return
         if kind == "click":
             surface = value.get("surface")
             if surface not in {"sidebar", "conversation"}:
@@ -547,6 +564,9 @@ class Application:
             project = value.get("project")
             if navigation_kind not in {"project", "task"} or not isinstance(project, str):
                 raise ValueError("navigate requires a target and project")
+            host = value.get("host")
+            if host is not None and not isinstance(host, str):
+                raise ValueError("navigate host must be a string or null")
             title = value.get("title")
             expanded = value.get("expanded")
             if navigation_kind == "task" and not isinstance(title, str):
@@ -556,7 +576,13 @@ class Application:
             backend.navigate(
                 self.desktop,
                 target,
-                NavigationAction(navigation_kind, project, title=title, expanded=expanded),
+                NavigationAction(
+                    navigation_kind,
+                    project,
+                    host=host,
+                    title=title,
+                    expanded=expanded,
+                ),
             )
             return
         raise ValueError("unknown action kind")
