@@ -160,6 +160,7 @@ def navigator_nodes():
             "Chat title",
             "",
             PixelRegion(448, 63, 260, 34),
+            stable_id="runtime:title-editor",
         ),
     )
 
@@ -729,6 +730,13 @@ def test_rename_chat_selects_the_task_then_replaces_its_header_title(
 ):
     task = next(node for node in fake_desktop.nodes if node.id == "finished")
     header = next(node for node in fake_desktop.nodes if node.id == "header-title")
+    before_editor = tuple(node for node in fake_desktop.nodes if node.id != "title-editor")
+    with_editor = before_editor + (
+        next(node for node in fake_desktop.nodes if node.id == "title-editor"),
+    )
+    fake_desktop = StagedActionDesktop(
+        before_editor, stages=(before_editor, before_editor, with_editor)
+    )
 
     CodexAgent().rename_chat(
         fake_desktop,
@@ -953,6 +961,89 @@ def test_create_chat_rejects_a_transition_that_keeps_the_previous_selection(
         )
 
     assert not any(call[0] == "paste_and_submit" for call in desktop.calls)
+
+
+def test_create_chat_rejects_an_invalid_initial_fingerprint_before_invoking(
+    navigator_nodes, codex_target
+):
+    unstable_selected = tuple(
+        replace(node, stable_id=None) if node.id == "finished" else node
+        for node in navigator_nodes
+        if node.id != "title-editor"
+    )
+    desktop = StagedActionDesktop(unstable_selected, stages=(unstable_selected,))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().create_chat(
+            desktop, codex_target, project="SummonLab", host="private_3", text="Never create"
+        )
+
+    assert not any(call[0] == "accessibility_action" for call in desktop.calls)
+
+
+def test_rename_rejects_a_persistent_header_field_that_predates_invocation(
+    monkeypatch, navigator_nodes, codex_target
+):
+    nodes = tuple(node for node in navigator_nodes if node.id != "title-editor") + (
+        AccessibilityNode(
+            "persistent-editor", "EditControl", "Search", "", PixelRegion(448, 63, 260, 34),
+            stable_id="runtime:persistent-editor",
+        ),
+    )
+    desktop = StagedActionDesktop(nodes, stages=(nodes, nodes, nodes))
+    clock = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().rename_chat(
+            desktop, codex_target, project="SummonLab", host="private_3",
+            task_id="runtime:finished", title="Finished task", new_title="Never type",
+        )
+
+    assert not any(call[0] == "replace_and_submit" for call in desktop.calls)
+
+
+def test_rename_rejects_a_new_editor_outside_the_selected_title_region(
+    monkeypatch, navigator_nodes, codex_target
+):
+    before = tuple(node for node in navigator_nodes if node.id != "title-editor")
+    wrong_editor = AccessibilityNode(
+        "command-field", "EditControl", "Command", "", PixelRegion(750, 63, 180, 34),
+        stable_id="runtime:command-field",
+    )
+    desktop = StagedActionDesktop(before, stages=(before, before, before + (wrong_editor,)))
+    clock = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().rename_chat(
+            desktop, codex_target, project="SummonLab", host="private_3",
+            task_id="runtime:finished", title="Finished task", new_title="Never type",
+        )
+
+    assert not any(call[0] == "replace_and_submit" for call in desktop.calls)
+
+
+def test_rename_rejects_ambiguous_new_title_editors(
+    monkeypatch, navigator_nodes, codex_target
+):
+    before = tuple(node for node in navigator_nodes if node.id != "title-editor")
+    first = replace(
+        next(node for node in navigator_nodes if node.id == "title-editor"),
+        stable_id="runtime:title-editor-first",
+    )
+    second = replace(first, id="title-editor-second", stable_id="runtime:title-editor-second")
+    desktop = StagedActionDesktop(before, stages=(before, before, before + (first, second)))
+    clock = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().rename_chat(
+            desktop, codex_target, project="SummonLab", host="private_3",
+            task_id="runtime:finished", title="Finished task", new_title="Never type",
+        )
+
+    assert not any(call[0] == "replace_and_submit" for call in desktop.calls)
 
 
 def test_rename_waits_for_the_exact_duplicate_selection_then_header_editor(

@@ -572,7 +572,11 @@ function initializePhoneWorkspace({
           renderNavigator(state.navigator);
         }
       } else {
-        elements.navigatorProjects.textContent = navigatorResult.reason.message;
+        if (state.creatingProject === null && state.renamingTask === null) {
+          elements.navigatorProjects.textContent = navigatorResult.reason.message;
+        } else {
+          showMessage(elements.conversationMessage, navigatorResult.reason.message, true);
+        }
       }
     })();
     try {

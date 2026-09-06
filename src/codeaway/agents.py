@@ -403,25 +403,18 @@ class CodexAgent:
             None,
         )
 
-    def _header_editor(
+    def _title_editors(
         self,
         nodes: list[AccessibilityNode],
-        target: AgentTarget,
-    ) -> AccessibilityNode | None:
-        sidebar = target.surfaces.sidebar.resolve(target.window.region)
-        header_bottom = target.window.region.y + max(
-            80, round(target.window.region.height * 0.1)
-        )
-        return next(
-            (
-                node
-                for node in nodes
-                if node.role.casefold() in {"edit", "editcontrol"}
-                and node.region.x >= sidebar.x + sidebar.width
-                and node.region.y < header_bottom
-            ),
-            None,
-        )
+        header: AccessibilityNode,
+    ) -> list[AccessibilityNode]:
+        """Return edit controls that overlap the invoked title button's region."""
+        return [
+            node
+            for node in nodes
+            if node.role.casefold() in {"edit", "editcontrol"}
+            and self._overlaps_region(node, header.region)
+        ]
 
     def _has_class_on_row(
         self,
@@ -625,12 +618,14 @@ class CodexAgent:
         if action is None:
             raise TargetUnavailable(f"new chat action for {project!r} is unavailable")
         before_transition = self._new_chat_fingerprint(nodes, target)
+        if before_transition is None:
+            raise TargetUnavailable(f"new chat state for {project!r} is unavailable")
         desktop.accessibility_action(action, AccessibilityAction.INVOKE)
         composer = target.surfaces.composer.resolve(target.window.region)
 
         def new_chat_ready(post_action_nodes: list[AccessibilityNode]):
             post_transition = self._new_chat_fingerprint(post_action_nodes, target)
-            if before_transition is None or post_transition is None:
+            if post_transition is None:
                 return None
             if before_transition[0] and not before_transition[0].isdisjoint(
                 post_transition[0]
@@ -681,19 +676,37 @@ class CodexAgent:
                 return None
             if not self._is_selected(selected_task):
                 return None
-            return self._header_title_button(post_action_nodes, target, title)
+            header = self._header_title_button(post_action_nodes, target, title)
+            if header is None:
+                return None
+            return header, post_action_nodes
 
-        header = self._wait_for_tree(
+        header, header_nodes = self._wait_for_tree(
             desktop,
             target,
             selected_header,
             f"title editor for {title!r} is unavailable",
         )
+        existing_editor_ids = {
+            editor.stable_id
+            for editor in self._title_editors(header_nodes, header)
+            if editor.stable_id is not None
+        }
         desktop.accessibility_action(header, AccessibilityAction.INVOKE)
+
+        def newly_appeared_title_editor(post_action_nodes: list[AccessibilityNode]):
+            candidates = [
+                editor
+                for editor in self._title_editors(post_action_nodes, header)
+                if editor.stable_id is not None
+                and editor.stable_id not in existing_editor_ids
+            ]
+            return candidates[0] if len(candidates) == 1 else None
+
         editor = self._wait_for_tree(
             desktop,
             target,
-            lambda post_action_nodes: self._header_editor(post_action_nodes, target),
+            newly_appeared_title_editor,
             f"title editor for {title!r} is unavailable",
         )
         desktop.replace_and_submit(target.window, editor.region.center, new_title)

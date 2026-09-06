@@ -41,7 +41,7 @@ class FakeElement {
     this.listeners = new Map();
     this.naturalWidth = 800;
     this.style = {};
-    this.textContent = "";
+    this._textContent = "";
     this.value = "";
     this._box = { left: 0, top: 0, width: 800, height: 600 };
     this._src = "";
@@ -80,6 +80,7 @@ class FakeElement {
   }
 
   replaceChildren(...children) {
+    for (const child of this.children) setConnected(child, false);
     for (const child of children) {
       if (child && typeof child === "object") {
         child.parentElement = this;
@@ -87,7 +88,17 @@ class FakeElement {
       }
     }
     this.children = [...children];
-    this.textContent = "";
+    this._textContent = "";
+  }
+
+  set textContent(value) {
+    for (const child of this.children) setConnected(child, false);
+    this.children = [];
+    this._textContent = String(value);
+  }
+
+  get textContent() {
+    return this._textContent;
   }
 
   setAttribute(name, value) {
@@ -679,6 +690,89 @@ test("navigator polling preserves a focused rename draft and restores its action
 
   await form.children.at(-1).emit("click");
   assert.equal(documentRef.activeElement, documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.at(-1));
+});
+
+test("a rejected navigator poll preserves the connected focused create editor", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  let navigatorReads = 0;
+  const snapshot = { available: true, projects: [{
+    name: "Project", host: "host", connected: false, expanded: true, state: "idle", tasks: [],
+  }] };
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") {
+      navigatorReads += 1;
+      if (navigatorReads === 2) throw new Error("navigator poll failed");
+      return response(snapshot);
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  const create = documentRef.elements["navigator-projects"].children[0].children[0].children.at(-1);
+  await create.emit("click");
+  const form = documentRef.elements["navigator-projects"].children[0].children.find(
+    (child) => child.className === "inline-editor create-chat-form",
+  );
+  form.children[0].value = "Keep me";
+  await form.children[0].emit("input");
+  form.children[0].focus();
+
+  await [...windowRef.intervals.values()][0]();
+
+  assert.equal(form.isConnected, true);
+  assert.equal(form.children[0].value, "Keep me");
+  assert.equal(documentRef.activeElement, form.children[0]);
+
+  await form.children.at(-1).emit("click");
+  await [...windowRef.intervals.values()][0]();
+  assert.equal(documentRef.elements["navigator-projects"].children[0].children[0].children.at(-1).isConnected, true);
+});
+
+test("a rejected navigator poll preserves the connected focused rename editor", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  let navigatorReads = 0;
+  const snapshot = { available: true, projects: [{
+    name: "Project", host: "host", connected: false, expanded: true, state: "idle",
+    tasks: [{ task_id: "runtime:task", title: "Original", state: "idle", worktree: false, selected: false }],
+  }] };
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") {
+      navigatorReads += 1;
+      if (navigatorReads === 2) throw new Error("navigator poll failed");
+      return response(snapshot);
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  const taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  await taskRow.children.at(-1).emit("click");
+  const form = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.find(
+    (child) => child.className === "inline-editor rename-chat-form",
+  );
+  form.children[0].value = "Keep renamed draft";
+  await form.children[0].emit("input");
+  form.children[0].focus();
+
+  await [...windowRef.intervals.values()][0]();
+
+  assert.equal(form.isConnected, true);
+  assert.equal(form.children[0].value, "Keep renamed draft");
+  assert.equal(documentRef.activeElement, form.children[0]);
+
+  await form.children.at(-1).emit("click");
+  await [...windowRef.intervals.values()][0]();
+  assert.equal(documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.at(-1).isConnected, true);
 });
 
 test("rename submits the originally opened task after a polling snapshot changes its title", async () => {
