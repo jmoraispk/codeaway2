@@ -91,6 +91,10 @@ class FakeAgent:
         del desktop, target
         self.calls.append(("send", text))
 
+    def create_chat(self, desktop, target, project, host, text):
+        del desktop, target
+        self.calls.append(("create_chat", project, host, text))
+
 
 @pytest.fixture
 def selected_window():
@@ -615,6 +619,18 @@ def test_navigate_dispatches_validated_semantic_action(app, body, expected):
 
     assert response.status == 200
     assert app.fake_agent.calls == [("navigate", expected)]
+
+
+def test_create_chat_dispatches_the_project_identity_and_initial_prompt(app):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"create_chat","project":"Project","host":null,"text":"Start here"}',
+    )
+
+    assert response.status == 200
+    assert app.fake_agent.calls == [("create_chat", "Project", None, "Start here")]
 
 
 def test_navigator_serializes_agent_snapshot(app):

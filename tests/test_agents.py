@@ -87,6 +87,7 @@ def navigator_nodes():
             "Start new chat in SummonLab",
             "",
             PixelRegion(340, 50, 30, 30),
+            actions=frozenset({AccessibilityAction.INVOKE}),
         ),
         AccessibilityNode(
             "connected",
@@ -644,6 +645,32 @@ def test_task_navigation_invokes_the_task_under_the_named_project(
         finished,
         AccessibilityAction.INVOKE,
     )
+
+
+def test_create_chat_invokes_the_project_action_then_submits_the_prompt(
+    fake_desktop, codex_target
+):
+    new_chat = next(node for node in fake_desktop.nodes if node.id == "new-chat")
+
+    CodexAgent().create_chat(
+        fake_desktop,
+        codex_target,
+        project="SummonLab",
+        host="private_3",
+        text="Investigate the regression",
+    )
+
+    assert fake_desktop.calls == [
+        ("activate", codex_target.window),
+        ("accessibility_tree", codex_target.window),
+        ("accessibility_action", new_chat, AccessibilityAction.INVOKE),
+        (
+            "paste_and_submit",
+            codex_target.window,
+            PixelPoint(700, 659),
+            "Investigate the regression",
+        ),
+    ]
 
 
 def test_sidebar_click_left_offsets_a_blue_dot(fake_desktop, codex_target):

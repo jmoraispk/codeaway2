@@ -516,6 +516,18 @@ class Application:
                 raise ValueError("text must be a string")
             backend.send(self.desktop, target, text)
             return
+        if kind == "create_chat":
+            project = value.get("project")
+            host = value.get("host")
+            text = value.get("text")
+            if not isinstance(project, str) or not project.strip():
+                raise ValueError("create_chat requires a project")
+            if host is not None and not isinstance(host, str):
+                raise ValueError("create_chat host must be a string or null")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("create_chat requires a nonempty prompt")
+            backend.create_chat(self.desktop, target, project, host, text)
+            return
         if kind == "click":
             surface = value.get("surface")
             if surface not in {"sidebar", "conversation"}:

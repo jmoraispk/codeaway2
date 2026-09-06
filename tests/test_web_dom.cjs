@@ -409,18 +409,18 @@ test("phone navigator renders accessible state and worktree icons without status
 
   const projects = documentRef.elements["navigator-projects"].children;
   assert.equal(projects.length, 4);
-  const alphaMeta = projects[0].children[0].children[2];
+  const alphaMeta = projects[0].children[0].children[1];
   assert.equal(alphaMeta.className, "project-meta");
   assert.equal(alphaMeta.children[0].className, "project-host");
   assert.equal(alphaMeta.children[0].textContent, "private_3");
   assertIcon(alphaMeta.children[1], "status-icon status-icon--connected", "Connected");
-  const betaMeta = projects[1].children[0].children[2];
+  const betaMeta = projects[1].children[0].children[1];
   assert.equal(betaMeta.children[0].textContent, "remote-ssh");
   assertIcon(betaMeta.children[1], "status-icon status-icon--busy", "Busy");
-  const gammaMeta = projects[2].children[0].children[2];
+  const gammaMeta = projects[2].children[0].children[1];
   assert.equal(gammaMeta.children[0].textContent, "local");
   assertIcon(gammaMeta.children[1], "status-icon status-icon--connected", "Connected");
-  const deltaMeta = projects[3].children[0].children[2];
+  const deltaMeta = projects[3].children[0].children[1];
   assert.equal(deltaMeta.children[0].textContent, "local");
   assertIcon(deltaMeta.children[1], "status-icon status-icon--connected", "Connected");
 
@@ -437,6 +437,67 @@ test("phone navigator renders accessible state and worktree icons without status
   assert.equal(tasks[2].children[1].children.length, 1);
   assertIcon(tasks[2].children[1].children[0], "worktree-marker", "Worktree");
   assert.equal(tasks[3].children[1].children.length, 0);
+});
+
+test("project action on the right creates a chat from its initial prompt", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const actions = [];
+  const fetchFn = async (path, options = {}) => {
+    if (path === "/api/status") {
+      return response({
+        ready: true,
+        revision: 0,
+        target: { agent_id: "codex", title: "Agent Window" },
+      });
+    }
+    if (path === "/api/navigator") {
+      return response({
+        available: true,
+        projects: [{
+          name: "SummonLab",
+          connected: true,
+          expanded: true,
+          host: "private_3",
+          state: "connected",
+          tasks: [],
+        }],
+      });
+    }
+    if (path === "/api/action") {
+      actions.push(JSON.parse(options.body));
+      return response({ revision: 1 });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+
+  let project = documentRef.elements["navigator-projects"].children[0];
+  const projectHeader = project.children[0];
+  const createButton = projectHeader.children.find(
+    (child) => child.className === "project-create",
+  );
+  assert.ok(createButton);
+  assert.equal(createButton.attributes["aria-label"], "New chat in SummonLab");
+  assert.equal(projectHeader.children.at(-1), createButton);
+
+  await createButton.emit("click");
+  project = documentRef.elements["navigator-projects"].children[0];
+  const form = project.children.find(
+    (child) => child.className === "inline-editor create-chat-form",
+  );
+  assert.ok(form);
+  form.children[0].value = "Investigate the regression";
+  await form.emit("submit");
+
+  assert.deepEqual(actions, [{
+    kind: "create_chat",
+    project: "SummonLab",
+    host: "private_3",
+    text: "Investigate the regression",
+  }]);
 });
 
 test("phone pointer and composer listeners dispatch validated actions", async () => {

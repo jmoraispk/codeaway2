@@ -167,6 +167,7 @@ function initializePhoneWorkspace({
   };
   const state = {
     actionBusy: false,
+    creatingProject: null,
     expanded: {},
     gesture: null,
     navigator: null,
@@ -258,10 +259,14 @@ function initializePhoneWorkspace({
       return;
     }
     for (const project of snapshot.projects) {
-      if (!(project.name in state.expanded)) state.expanded[project.name] = project.expanded;
-      const expanded = state.expanded[project.name];
+      const projectKey = `${project.name}\u0000${project.host || ""}`;
+      if (!(projectKey in state.expanded)) state.expanded[projectKey] = project.expanded;
+      const expanded = state.expanded[projectKey];
       const projectItem = documentRef.createElement("section");
       projectItem.className = "project";
+
+      const projectHeader = documentRef.createElement("div");
+      projectHeader.className = "project-header";
 
       const toggle = documentRef.createElement("button");
       toggle.className = "project-toggle";
@@ -278,12 +283,67 @@ function initializePhoneWorkspace({
       host.className = "project-host";
       host.textContent = project.host || "local";
       projectMeta.append(host, projectStatusIcon(project.state));
-      toggle.append(chevron, name, projectMeta);
+      const createButton = documentRef.createElement("button");
+      createButton.className = "project-create";
+      createButton.type = "button";
+      createButton.setAttribute("aria-label", `New chat in ${project.name}`);
+      createButton.append(svgIcon("project-create-icon", "M12 5v14M5 12h14"));
+      toggle.append(chevron, name);
       toggle.addEventListener("click", () => {
-        state.expanded = toggleProject(state.expanded, project.name);
+        state.expanded = toggleProject(state.expanded, projectKey);
         renderNavigator(state.navigator);
       });
-      projectItem.append(toggle);
+      createButton.addEventListener("click", () => {
+        state.expanded = { ...state.expanded, [projectKey]: true };
+        state.creatingProject = projectKey;
+        renderNavigator(state.navigator);
+      });
+      projectHeader.append(toggle, projectMeta, createButton);
+      projectItem.append(projectHeader);
+
+      if (state.creatingProject === projectKey) {
+        const form = documentRef.createElement("form");
+        form.className = "inline-editor create-chat-form";
+        const prompt = documentRef.createElement("textarea");
+        prompt.rows = 3;
+        prompt.placeholder = `First message for ${project.name}`;
+        prompt.setAttribute("aria-label", `First message for ${project.name}`);
+        const submit = documentRef.createElement("button");
+        submit.type = "submit";
+        submit.textContent = "Create chat";
+        const cancel = documentRef.createElement("button");
+        cancel.type = "button";
+        cancel.className = "secondary";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", () => {
+          state.creatingProject = null;
+          renderNavigator(state.navigator);
+        });
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const text = prompt.value;
+          if (!text.trim() || state.actionBusy) return;
+          submit.disabled = true;
+          cancel.disabled = true;
+          try {
+            await performAction({
+              kind: "create_chat",
+              project: project.name,
+              host: project.host || null,
+              text,
+            });
+            state.creatingProject = null;
+            renderNavigator(state.navigator);
+            showMessage(elements.conversationMessage, "Chat created. Waiting for Codex to index it…");
+          } catch (error) {
+            showMessage(elements.conversationMessage, error.message, true);
+            submit.disabled = false;
+            cancel.disabled = false;
+          }
+        });
+        form.append(prompt, submit, cancel);
+        projectItem.append(form);
+      }
 
       const tasks = documentRef.createElement("div");
       tasks.className = "task-list";

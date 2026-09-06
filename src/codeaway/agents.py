@@ -93,6 +93,15 @@ class AgentBackend(Protocol):
 
     def send(self, desktop: DesktopBackend, target: AgentTarget, text: str) -> None: ...
 
+    def create_chat(
+        self,
+        desktop: DesktopBackend,
+        target: AgentTarget,
+        project: str,
+        host: str | None,
+        text: str,
+    ) -> None: ...
+
 
 class AgentRegistry:
     def __init__(self, agents: list[AgentBackend] | tuple[AgentBackend, ...]):
@@ -423,5 +432,39 @@ class CodexAgent:
         text: str,
     ) -> None:
         self._activate(desktop, target)
+        composer = target.surfaces.composer.resolve(target.window.region)
+        desktop.paste_and_submit(target.window, composer.center, text)
+
+    def create_chat(
+        self,
+        desktop: DesktopBackend,
+        target: AgentTarget,
+        project: str,
+        host: str | None,
+        text: str,
+    ) -> None:
+        self._activate(desktop, target)
+        nodes = desktop.accessibility_tree(target.window)
+        projects = [
+            row
+            for row in self._rows(nodes)
+            if row.name == project and row.host == host
+        ]
+        if len(projects) != 1:
+            raise TargetUnavailable(f"project {project!r} is unavailable")
+        row = projects[0]
+        action = next(
+            (
+                node
+                for node in nodes
+                if node.name == f"Start new chat in {row.name}"
+                and self._same_row(row.node, node)
+                and AccessibilityAction.INVOKE in node.actions
+            ),
+            None,
+        )
+        if action is None:
+            raise TargetUnavailable(f"new chat action for {project!r} is unavailable")
+        desktop.accessibility_action(action, AccessibilityAction.INVOKE)
         composer = target.surfaces.composer.resolve(target.window.region)
         desktop.paste_and_submit(target.window, composer.center, text)
