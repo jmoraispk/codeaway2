@@ -1,5 +1,7 @@
 # CodeAway
 
+![CodeAway sends commands to desktop coding agents and returns replies and live status](docs/assets/codeaway-hero.png)
+
 CodeAway is a thin, browser-based remote control for local AI coding agents.
 Version 0.1 supports one pairing only: **Windows with Codex Desktop**. The
 source repository is `codeaway2`; the Python package and command are
