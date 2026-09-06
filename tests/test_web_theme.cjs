@@ -65,6 +65,33 @@ async function serveWeb() {
     ["/style.css", "style.css"],
   ]);
   const server = createServer(async (request, response) => {
+    if (request.url === "/api/status") {
+      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+        ready: true,
+        revision: 0,
+        target: { agent_id: "codex", title: "Agent Window" },
+      }));
+      return;
+    }
+    if (request.url === "/api/navigator") {
+      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+        available: true,
+        projects: [{
+          name: "Project",
+          host: "local",
+          expanded: true,
+          state: "connected",
+          tasks: [{
+            task_id: "task-1",
+            title: "Task",
+            state: "done",
+            worktree: true,
+            selected: false,
+          }],
+        }],
+      }));
+      return;
+    }
     const asset = assets.get(request.url);
     if (!asset) {
       response.writeHead(404).end();
@@ -164,4 +191,27 @@ test("setup workspace follows the operating system dark color preference", async
     panel: "rgb(30, 33, 39)",
     text: "rgb(239, 241, 245)",
   });
+});
+
+test("project and task status icons share a horizontal centerline", async () => {
+  const web = await serveWeb();
+  let centers;
+  try {
+    centers = await evaluateInDarkEdge(web.url, `(() => {
+      const project = document.querySelector(".project-meta .status-icon");
+      const task = document.querySelector(".task-meta .status-icon");
+      if (!project || !task) return false;
+      const projectBox = project.getBoundingClientRect();
+      const taskBox = task.getBoundingClientRect();
+      return JSON.stringify({
+        project: projectBox.left + projectBox.width / 2,
+        task: taskBox.left + taskBox.width / 2,
+      });
+    })()`);
+  } finally {
+    await web.close();
+  }
+
+  const positions = JSON.parse(centers);
+  assert.equal(positions.task, positions.project);
 });

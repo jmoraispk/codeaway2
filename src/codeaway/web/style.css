@@ -256,7 +256,7 @@ input { accent-color: var(--color-primary); }
 .task {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: .45rem;
-  padding: .5rem .55rem .5rem 3.25rem;
+  padding: .5rem 0 .5rem 3.25rem;
   border: 0;
   border-radius: 0;
   background: var(--color-surface);
