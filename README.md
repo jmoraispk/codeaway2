@@ -1,14 +1,38 @@
 # CodeAway
 
-![CodeAway sends commands to desktop coding agents and returns replies and live status](docs/assets/codeaway-hero.png)
+![CodeAway sends commands to desktop coding agents and returns replies and live status](https://raw.githubusercontent.com/jmoraispk/codeaway2/main/docs/assets/codeaway-hero.png)
 
 CodeAway is a thin, browser-based remote control for local AI coding agents.
 Version 0.1 supports one pairing only: **Windows with Codex Desktop**. The
 source repository is `codeaway2`; the Python package and command are
 `codeaway`.
 
-> Status: MVP implementation complete; the live Windows/phone smoke test is
-> still pending. The package is not published yet.
+> Status: early alpha. The Windows/Codex Desktop phone flow has been
+> smoke-tested; expect rough edges and breaking changes.
+
+## Install
+
+The shortest recommended path is:
+
+```powershell
+uvx codeaway
+```
+
+`uvx` is convenient, not required. You can instead install with either:
+
+```powershell
+pipx install codeaway
+```
+
+```powershell
+py -m pip install codeaway
+```
+
+## Platform support
+
+Windows with Codex Desktop is the supported pairing. macOS and Linux can
+install the package, but desktop control for those platforms is not implemented
+yet.
 
 ## Run CodeAway
 
