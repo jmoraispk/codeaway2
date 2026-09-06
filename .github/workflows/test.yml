@@ -28,7 +28,7 @@ jobs:
         run: uv run pytest -q
 
       - name: Run browser tests
-        run: node --test tests/test_web_ui.cjs tests/test_web_dom.cjs
+        run: node --test tests/test_web_ui.cjs tests/test_web_dom.cjs tests/test_web_theme.cjs
 
       - name: Build distributions
         run: uv build
