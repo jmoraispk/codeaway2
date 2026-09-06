@@ -10,23 +10,60 @@ source repository is `codeaway2`; the Python package and command are
 > Status: early alpha. The Windows/Codex Desktop phone flow has been
 > smoke-tested; expect rough edges and breaking changes.
 
-## Install
+## Quick start
 
-The shortest recommended path is:
+### 1. Install uv and Tailscale
 
-```powershell
-uvx codeaway
-```
-
-`uvx` is convenient, not required. You can instead install with either:
+On the Windows laptop, open PowerShell and run:
 
 ```powershell
-pipx install codeaway
+winget install --id astral-sh.uv --exact
+winget install --id Tailscale.Tailscale --exact
 ```
 
+Install the [Tailscale app](https://tailscale.com/download) on your phone too.
+Sign in to Tailscale on both devices with the same account, then open a new
+PowerShell window on the laptop.
+
+### 2. Start CodeAway
+
+Open Codex Desktop, keep its window visible, and run:
+
 ```powershell
-py -m pip install codeaway
+$ip = tailscale ip -4 | Select-Object -First 1
+uvx codeaway --ip $ip
 ```
+
+`uvx` downloads and runs CodeAway; there is no separate CodeAway installation
+step. Keep this PowerShell window open while using CodeAway.
+
+### 3. Calibrate on the laptop
+
+CodeAway opens the setup page in the laptop browser. If it does not open, use:
+
+```text
+http://<TAILSCALE-IP>:8765/setup
+```
+
+Choose the visible Codex Desktop window and draw the three labeled areas:
+
+- **Sidebar:** the projects and tasks on the left.
+- **Conversation:** the right pane above the input.
+- **Composer:** the chat box only; it may grow taller.
+
+Select **Save calibration**.
+
+### 4. Open CodeAway on the phone
+
+With Tailscale connected on the phone, open the workspace URL printed in
+PowerShell:
+
+```text
+http://<TAILSCALE-IP>:8765/
+```
+
+That is it. On later launches, run `uvx codeaway`; CodeAway reuses the saved
+Tailscale address and calibration.
 
 ## Platform support
 
@@ -34,41 +71,11 @@ Windows with Codex Desktop is the supported pairing. macOS and Linux can
 install the package, but desktop control for those platforms is not implemented
 yet.
 
-## Run CodeAway
+## Command options
 
-The first run is laptop-only. Start CodeAway in the foreground:
-
-```powershell
-uvx codeaway
-```
-
-It listens on `127.0.0.1:8765` and opens `/setup` in the laptop browser. Choose
-the visible Codex Desktop window and draw all three capture regions:
-
-- **Sidebar:** the projects and tasks on the left.
-- **Conversation:** the right pane above the input.
-- **Composer:** the chat box only; it may grow taller. Do not include the
-  full-width toolbar or status row.
-
-To enable phone access, restart with an address assigned to the laptop on your
-LAN or Tailscale network:
-
-```powershell
-uvx codeaway --ip <IPv4-LAN-or-Tailscale-address>
-```
-
-The explicit address is saved only after it binds successfully. Later
-`uvx codeaway` launches reuse both that address and the saved calibration. If
-the saved Codex window and all three regions resolve, CodeAway prints the phone
-workspace URL without opening a laptop browser. The phone workspace still
-links to `/setup` when recalibration is needed.
-
-If a cached address is no longer available, CodeAway warns, falls back to
-`127.0.0.1`, and saves that fallback. An invalid explicit address exits instead
-of silently changing interfaces. Use `--no-browser` to suppress an otherwise
-necessary setup launch and `--port PORT` to select and cache another port.
-CodeAway v0.1 accepts IPv4 literals only; IPv6 addresses are rejected with an
-actionable startup error.
+Pass `--ip <IPv4-address>` to use a different Tailscale or LAN address,
+`--port PORT` to choose another port, or `--no-browser` to suppress the setup
+page. CodeAway saves a successfully bound address and port for later launches.
 
 > **Security:** A non-loopback endpoint grants full desktop mouse and keyboard
 > input control to every device that can reach it. CodeAway v0.1 has no pairing
