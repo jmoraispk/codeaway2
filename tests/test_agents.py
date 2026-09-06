@@ -930,6 +930,31 @@ def test_create_chat_timeout_never_types_into_the_previous_chat(
     assert not any(call[0] == "paste_and_submit" for call in desktop.calls)
 
 
+def test_create_chat_rejects_a_transition_that_keeps_the_previous_selection(
+    monkeypatch, navigator_nodes, codex_target
+):
+    composer = AccessibilityNode(
+        "composer", "EditControl", "Message", "", PixelRegion(450, 650, 300, 30), stable_id="runtime:composer"
+    )
+    old_and_new_selected = tuple(
+        replace(node, class_name=f"{node.class_name} bg-primary-ghost-hover")
+        if node.id == "running" else node
+        for node in navigator_nodes
+    ) + (composer,)
+    desktop = StagedActionDesktop(
+        navigator_nodes, stages=(navigator_nodes, old_and_new_selected)
+    )
+    clock = iter((0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().create_chat(
+            desktop, codex_target, project="SummonLab", host="private_3", text="Do not send"
+        )
+
+    assert not any(call[0] == "paste_and_submit" for call in desktop.calls)
+
+
 def test_rename_waits_for_the_exact_duplicate_selection_then_header_editor(
     navigator_nodes, codex_target
 ):

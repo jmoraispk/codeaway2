@@ -752,6 +752,46 @@ test("rename polling preserves an intentionally empty draft", async () => {
   assert.equal(form.children[0].value, "");
 });
 
+test("tasks without a stable identity remain readable but cannot navigate or rename", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const actions = [];
+  const fetchFn = async (path, options = {}) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response({ available: true, projects: [{
+      name: "Project", host: "host", connected: false, expanded: true, state: "idle",
+      tasks: [
+        { task_id: null, title: "Unstable one", state: "idle", worktree: false, selected: false },
+        { task_id: null, title: "Unstable two", state: "busy", worktree: false, selected: false },
+      ],
+    }] });
+    if (path === "/api/action") {
+      actions.push(JSON.parse(options.body));
+      return response({ revision: 1 });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  const rows = documentRef.elements["navigator-projects"].children[0].children.at(-1).children;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].children[0].children[0].textContent, "Unstable one");
+  assert.equal(rows[1].children[0].children[0].textContent, "Unstable two");
+  assert.equal(rows[0].children[0].disabled, true);
+  assert.equal(rows[1].children.at(-1).disabled, true);
+
+  await rows[0].children[0].emit("click");
+  await rows[1].children.at(-1).emit("click");
+
+  assert.deepEqual(actions, []);
+  assert.equal(rows.some((row) => row.children.some(
+    (child) => child.className === "inline-editor rename-chat-form",
+  )), false);
+});
+
 test("duplicate project hosts and task titles retain their exact remote action identity", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();

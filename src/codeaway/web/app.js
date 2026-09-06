@@ -364,13 +364,17 @@ function initializePhoneWorkspace({
       const tasks = documentRef.createElement("div");
       tasks.className = "task-list";
       tasks.hidden = !expanded;
-      for (const task of project.tasks) {
-        const taskKey = `${projectKey}\u0000${task.task_id}`;
+      for (const [taskIndex, task] of project.tasks.entries()) {
+        const taskAvailable = typeof task.task_id === "string" && task.task_id.length > 0;
+        const taskKey = taskAvailable
+          ? `${projectKey}\u0000${task.task_id}`
+          : `${projectKey}\u0000unavailable:${taskIndex}`;
         const taskRow = documentRef.createElement("div");
         taskRow.className = "task-row";
         const taskButton = documentRef.createElement("button");
         taskButton.className = "task";
         taskButton.type = "button";
+        taskButton.disabled = !taskAvailable;
         taskButton.classList.toggle("selected", task.selected);
         const taskMeta = documentRef.createElement("span");
         taskMeta.className = "task-meta";
@@ -387,7 +391,7 @@ function initializePhoneWorkspace({
         if (statusIcon) taskMeta.append(statusIcon);
         taskButton.append(title, taskMeta);
         taskButton.addEventListener("click", async () => {
-          if (state.actionBusy) return;
+          if (!taskAvailable || state.actionBusy) return;
           try {
             await performAction({
               kind: "navigate",
@@ -405,12 +409,14 @@ function initializePhoneWorkspace({
         const renameButton = documentRef.createElement("button");
         renameButton.className = "task-rename";
         renameButton.type = "button";
+        renameButton.disabled = !taskAvailable;
         renameButton.setAttribute("aria-label", `Rename ${task.title}`);
         renameButton.append(svgIcon(
           "task-rename-icon",
           "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z",
         ));
         renameButton.addEventListener("click", () => {
+          if (!taskAvailable) return;
           state.renamingTask = {
             key: taskKey,
             project: project.name,

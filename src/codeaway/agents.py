@@ -632,7 +632,9 @@ class CodexAgent:
             post_transition = self._new_chat_fingerprint(post_action_nodes, target)
             if before_transition is None or post_transition is None:
                 return None
-            if before_transition[0] and post_transition[0] == before_transition[0]:
+            if before_transition[0] and not before_transition[0].isdisjoint(
+                post_transition[0]
+            ):
                 return None
             if post_transition == before_transition:
                 return None
