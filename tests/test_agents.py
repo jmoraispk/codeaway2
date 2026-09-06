@@ -798,6 +798,49 @@ def test_create_chat_fails_without_a_fresh_visible_hover_action(
     ]
 
 
+@pytest.mark.parametrize(
+    ("row_region", "action_region", "stable_id"),
+    [
+        (PixelRegion(100, 50, 200, 30), PixelRegion(340, 50, 30, 30), None),
+        (PixelRegion(100, 50, 300, 30), PixelRegion(1100, 50, 30, 30), "runtime:offscreen"),
+    ],
+)
+def test_create_chat_rejects_an_action_outside_its_row_or_window(
+    monkeypatch, fake_desktop, codex_target, row_region, action_region, stable_id
+):
+    project_row = replace(
+        next(node for node in fake_desktop.nodes if node.id == "project"),
+        name="SummonLab",
+        region=row_region,
+    )
+    displaced_action = replace(
+        next(node for node in fake_desktop.nodes if node.id == "new-chat"),
+        region=action_region,
+        stable_id=stable_id,
+    )
+    nodes = tuple(
+        project_row
+        if node.id == "project"
+        else displaced_action
+        if node.id == "new-chat"
+        else node
+        for node in fake_desktop.nodes
+    )
+    desktop = ActionDesktop(nodes)
+    clock = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().create_chat(
+            desktop, codex_target, project="SummonLab", host=None, text="Do not send"
+        )
+
+    assert desktop.calls == [
+        ("activate", codex_target.window),
+        ("accessibility_tree", codex_target.window),
+    ]
+
+
 def test_rename_chat_selects_the_task_then_replaces_its_header_title(
     fake_desktop, codex_target
 ):

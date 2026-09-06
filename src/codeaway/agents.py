@@ -325,6 +325,15 @@ class CodexAgent:
             and region.y < node.region.y + node.region.height
         )
 
+    @staticmethod
+    def _is_within_region(node: AccessibilityNode, region) -> bool:
+        return (
+            node.region.x >= region.x
+            and node.region.y >= region.y
+            and node.region.x + node.region.width <= region.x + region.width
+            and node.region.y + node.region.height <= region.y + region.height
+        )
+
     def _new_chat_fingerprint(
         self, nodes: list[AccessibilityNode], target: AgentTarget
     ) -> tuple[frozenset[str], frozenset[str], frozenset[str]] | None:
@@ -363,16 +372,21 @@ class CodexAgent:
         return frozenset(selected), frozenset(headers), frozenset(composers)
 
     def _new_chat_action(
-        self, row: _ProjectRow, nodes: list[AccessibilityNode]
+        self,
+        row: _ProjectRow,
+        nodes: list[AccessibilityNode],
+        window_region,
     ) -> AccessibilityNode | None:
         actions = [
             node
             for node in nodes
             if node.name == f"Start new chat in {row.name}"
             and self._same_row(row.node, node)
+            and self._overlaps_horizontally(row.node, node)
             and AccessibilityAction.INVOKE in node.actions
             and node.region.width > 0
             and node.region.height > 0
+            and self._is_within_region(node, window_region)
         ]
         return actions[0] if len(actions) == 1 else None
 
@@ -633,7 +647,7 @@ class CodexAgent:
         self._activate(desktop, target)
         nodes = desktop.accessibility_tree(target.window)
         row = self._project_row(nodes, project, host)
-        action = self._new_chat_action(row, nodes)
+        action = self._new_chat_action(row, nodes, target.window.region)
         if action is None:
             raise TargetUnavailable(f"new chat action for {project!r} is unavailable")
         before_transition = self._new_chat_fingerprint(nodes, target)
@@ -646,7 +660,9 @@ class CodexAgent:
                 hover_row = self._project_row(hover_nodes, project, host)
             except TargetUnavailable:
                 return None
-            hover_action = self._new_chat_action(hover_row, hover_nodes)
+            hover_action = self._new_chat_action(
+                hover_row, hover_nodes, target.window.region
+            )
             if hover_action is None or self._connected_marker_occupies_action_slot(
                 hover_row, hover_action, hover_nodes
             ):

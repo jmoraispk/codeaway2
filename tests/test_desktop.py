@@ -543,6 +543,63 @@ def test_native_cursor_placement_failure_emits_no_mouse_event(monkeypatch):
     assert mouse_events == []
 
 
+def test_native_move_positions_the_cursor_without_emitting_mouse_events(monkeypatch):
+    cursor_positions = []
+    mouse_events = []
+    user32 = SimpleNamespace(
+        SetCursorPos=lambda x, y: cursor_positions.append((x, y)) or 1,
+        mouse_event=lambda *values: mouse_events.append(values),
+    )
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    native = _WindowsNative()
+    foreground_handles = []
+    monkeypatch.setattr(
+        native,
+        "is_foreground",
+        lambda native_handle: foreground_handles.append(native_handle) or True,
+    )
+
+    assert native.move(10, 2560, 100) is True
+
+    assert cursor_positions == [(2560, 100)]
+    assert foreground_handles == [10]
+    assert mouse_events == []
+
+
+def test_native_move_aborts_when_cursor_placement_fails(monkeypatch):
+    cursor_positions = []
+    mouse_events = []
+    user32 = SimpleNamespace(
+        SetCursorPos=lambda x, y: cursor_positions.append((x, y)) or 0,
+        mouse_event=lambda *values: mouse_events.append(values),
+    )
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    native = _WindowsNative()
+    monkeypatch.setattr(native, "is_foreground", lambda native_handle: pytest.fail("checked"))
+
+    assert native.move(10, 2560, 100) is False
+
+    assert cursor_positions == [(2560, 100)]
+    assert mouse_events == []
+
+
+def test_native_move_aborts_when_the_target_loses_foreground(monkeypatch):
+    cursor_positions = []
+    mouse_events = []
+    user32 = SimpleNamespace(
+        SetCursorPos=lambda x, y: cursor_positions.append((x, y)) or 1,
+        mouse_event=lambda *values: mouse_events.append(values),
+    )
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    native = _WindowsNative()
+    monkeypatch.setattr(native, "is_foreground", lambda native_handle: False)
+
+    assert native.move(10, 2560, 100) is False
+
+    assert cursor_positions == [(2560, 100)]
+    assert mouse_events == []
+
+
 def test_native_activation_does_not_restore_or_move_visible_window(monkeypatch):
     region = [PixelRegion(2560, 0, 2560, 2076)]
     calls = mock_native_activation(
