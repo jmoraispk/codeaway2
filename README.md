@@ -3,9 +3,8 @@
 ![CodeAway sends commands to desktop coding agents and returns replies and live status](https://raw.githubusercontent.com/jmoraispk/codeaway2/main/docs/assets/codeaway-hero.png)
 
 CodeAway is a thin, browser-based remote control for local AI coding agents.
-Version 0.1 supports one pairing only: **Windows with Codex Desktop**. The
-source repository is `codeaway2`; the Python package and command are
-`codeaway`.
+The first supported pairing is **Windows with Codex Desktop**. The source
+repository is `codeaway2`; the Python package and command are `codeaway`.
 
 > Status: early alpha. The Windows/Codex Desktop phone flow has been
 > smoke-tested; expect rough edges and breaking changes.
@@ -65,6 +64,14 @@ http://<TAILSCALE-IP>:8765/
 That is it. On later launches, run `uvx codeaway`; CodeAway reuses the saved
 Tailscale address and calibration.
 
+From the phone workspace you can:
+
+- Tap a task to open it, then read, scroll, click, and send messages remotely.
+- Tap the **+** at the far right of a project, enter its first prompt, and
+  select **Create chat**. CodeAway creates the task and sends that prompt so
+  Codex can index it immediately.
+- Tap the pencil at the far right of a task to rename it.
+
 ## Platform support
 
 Windows with Codex Desktop is the supported pairing. macOS and Linux can
@@ -78,8 +85,8 @@ Pass `--ip <IPv4-address>` to use a different Tailscale or LAN address,
 page. CodeAway saves a successfully bound address and port for later launches.
 
 > **Security:** A non-loopback endpoint grants full desktop mouse and keyboard
-> input control to every device that can reach it. CodeAway v0.1 has no pairing
-> or authentication, so expose it only on a network boundary you trust.
+> input control to every device that can reach it. CodeAway has no pairing or
+> authentication, so expose it only on a network boundary you trust.
 
 ## Architecture
 
