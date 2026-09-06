@@ -223,8 +223,8 @@ input { accent-color: var(--color-primary); }
   background: var(--color-surface);
   font-weight: 700;
 }
-.project-toggle:hover, .project-create:hover, .task:hover, .task-rename:hover { background: var(--color-surface-hover); }
-.project-chevron, .project-create-icon, .task-rename-icon, .worktree-marker, .status-icon { width: 16px; height: 16px; flex: none; }
+.project-toggle:hover, .project-create:hover, .task:hover, .task-alias:hover { background: var(--color-surface-hover); }
+.project-chevron, .project-create-icon, .task-alias-icon, .worktree-marker, .status-icon { width: 16px; height: 16px; flex: none; }
 .project-chevron { transition: transform .12s ease; }
 .project-chevron.expanded { transform: rotate(180deg); }
 .project-name { min-width: 0; overflow-wrap: anywhere; }
@@ -263,7 +263,7 @@ input { accent-color: var(--color-primary); }
   font-weight: 500;
 }
 .task.selected { background: var(--color-surface-selected); color: var(--color-selected-text); }
-.task-rename {
+.task-alias {
   display: grid;
   width: 2.65rem;
   min-height: 2.65rem;

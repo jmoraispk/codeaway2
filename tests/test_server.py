@@ -95,11 +95,6 @@ class FakeAgent:
         del desktop, target
         self.calls.append(("create_chat", project, host, text))
 
-    def rename_chat(self, desktop, target, project, host, task_id, title, new_title):
-        del desktop, target
-        self.calls.append(("rename_chat", project, host, task_id, title, new_title))
-
-
 @pytest.fixture
 def selected_window():
     return DesktopWindow(
@@ -642,7 +637,7 @@ def test_task_navigation_preserves_the_project_host_identity(app):
     "body",
     [
         b'{"kind":"navigate","target":"task","project":"Project","title":"Task"}',
-        b'{"kind":"rename_chat","project":"Project","title":"Task","new_title":"Clear title"}',
+        b'{"kind":"alias_chat","project":"Project","host":null,"title":"Task","alias":"Clear title"}',
     ],
 )
 def test_task_actions_reject_missing_snapshot_task_identity(app, body):
@@ -664,18 +659,149 @@ def test_create_chat_dispatches_the_project_identity_and_initial_prompt(app):
     assert app.fake_agent.calls == [("create_chat", "Project", None, "Start here")]
 
 
-def test_rename_chat_dispatches_both_titles_and_the_project_identity(app):
+def test_alias_chat_keeps_the_codex_navigation_identity_across_navigator_refreshes(app):
+    alias = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"alias_chat","project":"Project","host":null,"task_id":"0","title":"Task","alias":"Clear title"}',
+    )
+
+    assert alias.status == 200
+    assert app.fake_agent.calls == []
+    first = payload(app.dispatch("GET", "/api/navigator", {}, b""))
+    second = payload(app.dispatch("GET", "/api/navigator", {}, b""))
+    assert first["projects"][0]["tasks"][0] == {
+        "selected": False,
+        "state": "idle",
+        "task_id": "0",
+        "title": "Task",
+        "display_title": "Clear title",
+        "worktree": False,
+    }
+    assert second["projects"][0]["tasks"][0] == first["projects"][0]["tasks"][0]
+
+    navigation = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"navigate","target":"task","project":"Project","host":null,"task_id":"0","title":"Task"}',
+    )
+
+    assert navigation.status == 200
+    assert app.fake_agent.calls == [
+        ("navigate", NavigationAction("task", "Project", task_id="0", title="Task"))
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"kind":"alias_chat","project":"Project","host":null,"task_id":"0","title":"Task","alias":""}',
+        b'{"kind":"alias_chat","project":"Project","task_id":"0","title":"Task","alias":"Clear title"}',
+        b'{"kind":"alias_chat","project":"Project","host":null,"title":"Task","alias":"Clear title"}',
+        b'{"kind":"alias_chat","project":"Project","host":null,"task_id":"0","alias":"Clear title"}',
+    ],
+)
+def test_alias_chat_rejects_incomplete_or_empty_identity(app, body):
+    response = app.dispatch("POST", "/api/action", json_headers(), body)
+
+    assert response.status == 400
+    assert app.fake_agent.calls == []
+
+
+@pytest.mark.parametrize(
+    "project, host, task_id, title",
+    [
+        ("Project", None, "0", "Retitled"),
+        ("Project", None, "other", "Task"),
+        ("Other project", None, "0", "Task"),
+        ("Project", "other-host", "0", "Task"),
+    ],
+)
+def test_alias_chat_fails_closed_when_the_snapshot_identity_changes(
+    app, project, host, task_id, title
+):
     response = app.dispatch(
         "POST",
         "/api/action",
         json_headers(),
-        b'{"kind":"rename_chat","project":"Project","host":null,"task_id":"0","title":"Task","new_title":"Clear title"}',
+        b'{"kind":"alias_chat","project":"Project","host":null,"task_id":"0","title":"Task","alias":"Clear title"}',
+    )
+    assert response.status == 200
+
+    def changed_snapshot(desktop, target):
+        del desktop, target
+        return AgentSnapshot(
+            available=True,
+            source="fake",
+            projects=(
+                ProjectSnapshot(
+                    project,
+                    host,
+                    False,
+                    "idle",
+                    True,
+                    (TaskSnapshot(title, "idle", task_id=task_id),),
+                ),
+            ),
+            captured_at="2026-09-04T00:00:00+00:00",
+        )
+
+    app.fake_agent.inspect = changed_snapshot
+
+    task = payload(app.dispatch("GET", "/api/navigator", {}, b""))["projects"][0]["tasks"][0]
+
+    assert task["title"] == title
+    assert "display_title" not in task
+
+
+def test_alias_chat_fails_closed_when_the_selected_desktop_target_changes(
+    app, selected_window
+):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"alias_chat","project":"Project","host":null,"task_id":"0","title":"Task","alias":"Clear title"}',
+    )
+    assert response.status == 200
+
+    other_window = replace(selected_window, id="window-2", native_handle=43)
+    app.fake_desktop.windows.append(other_window)
+    app.state.target = AgentTarget(
+        "fake", other_window, app.fake_agent.default_surfaces(other_window)
     )
 
+    task = payload(app.dispatch("GET", "/api/navigator", {}, b""))["projects"][0]["tasks"][0]
+
+    assert "display_title" not in task
+
+
+def test_alias_chat_starts_empty_in_a_new_application_instance(app, tmp_path, selected_window):
+    response = app.dispatch(
+        "POST",
+        "/api/action",
+        json_headers(),
+        b'{"kind":"alias_chat","project":"Project","host":null,"task_id":"0","title":"Task","alias":"Clear title"}',
+    )
     assert response.status == 200
-    assert app.fake_agent.calls == [
-        ("rename_chat", "Project", None, "0", "Task", "Clear title")
-    ]
+
+    new_agent = FakeAgent()
+    new_target = AgentTarget(
+        "fake", selected_window, new_agent.default_surfaces(selected_window)
+    )
+    fresh = Application(
+        AppState(AppConfig(), new_target),
+        AgentRegistry([new_agent]),
+        {new_agent.id: new_agent},
+        FakeDesktop([selected_window]),
+        tmp_path / "fresh-config.json",
+    )
+
+    task = payload(fresh.dispatch("GET", "/api/navigator", {}, b""))["projects"][0]["tasks"][0]
+
+    assert "display_title" not in task
 
 
 def test_navigator_serializes_agent_snapshot(app):

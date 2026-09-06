@@ -5,7 +5,7 @@ import json
 import math
 import os
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from importlib import resources
@@ -63,6 +63,15 @@ class AppState:
     conversation_token: tuple[object, ...] | None = None
 
 
+@dataclass(frozen=True)
+class _TaskAliasIdentity:
+    target: tuple[str, int, str]
+    project: str
+    host: str | None
+    task_id: str
+    title: str
+
+
 class Application:
     def __init__(
         self,
@@ -78,6 +87,7 @@ class Application:
         self.desktop = desktop
         self.config_path = Path(config_path)
         self._discovered_targets: dict[str, AgentTarget] = {}
+        self._task_aliases: dict[_TaskAliasIdentity, str] = {}
 
     @staticmethod
     def _json_response(status: int, value: Any) -> Response:
@@ -214,6 +224,26 @@ class Application:
             target.window.native_handle,
             os.path.normcase(target.window.process_path),
             target.surfaces,
+        )
+
+    @staticmethod
+    def _alias_target_identity(target: AgentTarget) -> tuple[str, int, str]:
+        return (
+            target.agent_id,
+            target.window.native_handle,
+            os.path.normcase(os.path.normpath(target.window.process_path)),
+        )
+
+    def _task_alias_identity(
+        self,
+        target: AgentTarget,
+        project: str,
+        host: str | None,
+        task_id: str,
+        title: str,
+    ) -> _TaskAliasIdentity:
+        return _TaskAliasIdentity(
+            self._alias_target_identity(target), project, host, task_id, title
         )
 
     @staticmethod
@@ -433,7 +463,35 @@ class Application:
             )
         except TargetUnavailable:
             return self._error(409, "target_unavailable", "Selected window is unavailable.")
-        return self._json_response(200, asdict(snapshot))
+        aliased_projects = tuple(
+            replace(
+                project,
+                tasks=tuple(
+                    replace(
+                        task,
+                        display_title=self._task_aliases.get(
+                            self._task_alias_identity(
+                                target,
+                                project.name,
+                                project.host,
+                                task.task_id,
+                                task.title,
+                            )
+                        )
+                        if task.task_id is not None
+                        else None,
+                    )
+                    for task in project.tasks
+                ),
+            )
+            for project in snapshot.projects
+        )
+        value = asdict(replace(snapshot, projects=aliased_projects))
+        for project in value["projects"]:
+            for task in project["tasks"]:
+                if task["display_title"] is None:
+                    del task["display_title"]
+        return self._json_response(200, value)
 
     def _calibration(self, value: dict[str, Any]) -> Response:
         with self.state.action_lock:
@@ -528,25 +586,25 @@ class Application:
                 raise ValueError("create_chat requires a nonempty prompt")
             backend.create_chat(self.desktop, target, project, host, text)
             return
-        if kind == "rename_chat":
+        if kind == "alias_chat":
             project = value.get("project")
             host = value.get("host")
             task_id = value.get("task_id")
             title = value.get("title")
-            new_title = value.get("new_title")
+            alias = value.get("alias")
             if not isinstance(project, str) or not project.strip():
-                raise ValueError("rename_chat requires a project")
-            if host is not None and not isinstance(host, str):
-                raise ValueError("rename_chat host must be a string or null")
+                raise ValueError("alias_chat requires a project")
+            if "host" not in value or (host is not None and not isinstance(host, str)):
+                raise ValueError("alias_chat host must be a string or null")
             if not isinstance(task_id, str) or not task_id:
-                raise ValueError("rename_chat requires a task_id")
+                raise ValueError("alias_chat requires a task_id")
             if not isinstance(title, str) or not title.strip():
-                raise ValueError("rename_chat requires the current title")
-            if not isinstance(new_title, str) or not new_title.strip():
-                raise ValueError("rename_chat requires a nonempty new title")
-            backend.rename_chat(
-                self.desktop, target, project, host, task_id, title, new_title
-            )
+                raise ValueError("alias_chat requires the current title")
+            if not isinstance(alias, str) or not alias.strip():
+                raise ValueError("alias_chat requires a nonempty alias")
+            self._task_aliases[
+                self._task_alias_identity(target, project, host, task_id, title)
+            ] = alias.strip()
             return
         if kind == "click":
             surface = value.get("surface")

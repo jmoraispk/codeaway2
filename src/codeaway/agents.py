@@ -38,6 +38,7 @@ class TaskSnapshot:
     worktree: bool = False
     selected: bool = False
     task_id: str | None = None
+    display_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -104,17 +105,6 @@ class AgentBackend(Protocol):
         project: str,
         host: str | None,
         text: str,
-    ) -> None: ...
-
-    def rename_chat(
-        self,
-        desktop: DesktopBackend,
-        target: AgentTarget,
-        project: str,
-        host: str | None,
-        task_id: str,
-        title: str,
-        new_title: str,
     ) -> None: ...
 
 
@@ -422,42 +412,6 @@ class CodexAgent:
                 raise TargetUnavailable(unavailable_message)
             time.sleep(min(self._ACTION_POLL_SECONDS, remaining))
 
-    def _header_title_button(
-        self,
-        nodes: list[AccessibilityNode],
-        target: AgentTarget,
-        title: str,
-    ) -> AccessibilityNode | None:
-        sidebar = target.surfaces.sidebar.resolve(target.window.region)
-        header_bottom = target.window.region.y + max(
-            80, round(target.window.region.height * 0.1)
-        )
-        return next(
-            (
-                node
-                for node in nodes
-                if node.name == title
-                and node.role.casefold() in {"button", "buttoncontrol"}
-                and AccessibilityAction.INVOKE in node.actions
-                and node.region.x >= sidebar.x + sidebar.width
-                and node.region.y < header_bottom
-            ),
-            None,
-        )
-
-    def _title_editors(
-        self,
-        nodes: list[AccessibilityNode],
-        header: AccessibilityNode,
-    ) -> list[AccessibilityNode]:
-        """Return edit controls that overlap the invoked title button's region."""
-        return [
-            node
-            for node in nodes
-            if node.role.casefold() in {"edit", "editcontrol"}
-            and self._overlaps_region(node, header.region)
-        ]
-
     def _has_class_on_row(
         self,
         task: AccessibilityNode,
@@ -706,62 +660,3 @@ class CodexAgent:
             f"new chat composer for {project!r} is unavailable",
         )
         desktop.paste_and_submit(target.window, composer.center, text)
-
-    def rename_chat(
-        self,
-        desktop: DesktopBackend,
-        target: AgentTarget,
-        project: str,
-        host: str | None,
-        task_id: str,
-        title: str,
-        new_title: str,
-    ) -> None:
-        self._activate(desktop, target)
-        nodes = desktop.accessibility_tree(target.window)
-        row = self._project_row(nodes, project, host)
-        task = self._task_node(row, task_id, title)
-        desktop.accessibility_action(task, AccessibilityAction.INVOKE)
-
-        def selected_header(post_action_nodes: list[AccessibilityNode]):
-            try:
-                post_action_row = self._project_row(post_action_nodes, project, host)
-                selected_task = self._task_node(post_action_row, task_id, title)
-            except TargetUnavailable:
-                return None
-            if not self._is_selected(selected_task):
-                return None
-            header = self._header_title_button(post_action_nodes, target, title)
-            if header is None:
-                return None
-            return header, post_action_nodes
-
-        header, header_nodes = self._wait_for_tree(
-            desktop,
-            target,
-            selected_header,
-            f"title editor for {title!r} is unavailable",
-        )
-        existing_editor_ids = {
-            editor.stable_id
-            for editor in self._title_editors(header_nodes, header)
-            if editor.stable_id is not None
-        }
-        desktop.accessibility_action(header, AccessibilityAction.INVOKE)
-
-        def newly_appeared_title_editor(post_action_nodes: list[AccessibilityNode]):
-            candidates = [
-                editor
-                for editor in self._title_editors(post_action_nodes, header)
-                if editor.stable_id is not None
-                and editor.stable_id not in existing_editor_ids
-            ]
-            return candidates[0] if len(candidates) == 1 else None
-
-        editor = self._wait_for_tree(
-            desktop,
-            target,
-            newly_appeared_title_editor,
-            f"title editor for {title!r} is unavailable",
-        )
-        desktop.replace_and_submit(target.window, editor.region.center, new_title)

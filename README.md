@@ -70,7 +70,7 @@ From the phone workspace you can:
 - Tap the **+** at the far right of a project, enter its first prompt, and
   select **Create chat**. CodeAway creates the task and sends that prompt so
   Codex can index it immediately.
-- Tap the pencil at the far right of a task to rename it.
+- Tap the pencil at the far right of a task to save a session-only local alias.
 
 ## Platform support
 

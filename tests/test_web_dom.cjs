@@ -542,7 +542,7 @@ test("project action on the right creates a chat from its initial prompt", async
   }]);
 });
 
-test("task action on the right renames its chat", async () => {
+test("task action on the right saves a local alias while rendering it separately", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();
   const actions = [];
@@ -566,6 +566,7 @@ test("task action on the right renames its chat", async () => {
           tasks: [{
             task_id: "0",
             title: "Old title",
+            display_title: "Saved alias",
             state: "unknown",
             worktree: false,
             selected: false,
@@ -585,18 +586,19 @@ test("task action on the right renames its chat", async () => {
 
   let project = documentRef.elements["navigator-projects"].children[0];
   let taskRow = project.children.at(-1).children[0];
-  const renameButton = taskRow.children.find(
-    (child) => child.className === "task-rename",
+  assert.equal(taskRow.children[0].children[0].textContent, "Saved alias");
+  const aliasButton = taskRow.children.find(
+    (child) => child.className === "task-alias",
   );
-  assert.ok(renameButton);
-  assert.equal(renameButton.attributes["aria-label"], "Rename Old title");
-  assert.equal(taskRow.children.at(-1), renameButton);
+  assert.ok(aliasButton);
+  assert.equal(aliasButton.attributes["aria-label"], "Alias Old title");
+  assert.equal(taskRow.children.at(-1), aliasButton);
 
-  await renameButton.emit("click");
+  await aliasButton.emit("click");
   project = documentRef.elements["navigator-projects"].children[0];
   taskRow = project.children.at(-1).children[0];
   const form = taskRow.children.find(
-    (child) => child.className === "inline-editor rename-chat-form",
+    (child) => child.className === "inline-editor alias-chat-form",
   );
   assert.ok(form);
   assert.equal(form.children[0].value, "Old title");
@@ -604,12 +606,12 @@ test("task action on the right renames its chat", async () => {
   await form.emit("submit");
 
   assert.deepEqual(actions, [{
-    kind: "rename_chat",
+    kind: "alias_chat",
     project: "SummonLab",
     host: "private_3",
     task_id: "0",
     title: "Old title",
-    new_title: "Clear title",
+    alias: "Clear title",
   }]);
 });
 
@@ -652,7 +654,7 @@ test("navigator polling preserves a focused create draft and restores the projec
   assert.equal(documentRef.activeElement, documentRef.elements["navigator-projects"].children[0].children[0].children.at(-1));
 });
 
-test("navigator polling preserves a focused rename draft and restores its action on cancel", async () => {
+test("navigator polling preserves a focused alias draft and restores its action on cancel", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();
   const snapshot = {
@@ -675,7 +677,7 @@ test("navigator polling preserves a focused rename draft and restores its action
   let taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
   await taskRow.children.at(-1).emit("click");
   let form = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.find(
-    (child) => child.className === "inline-editor rename-chat-form",
+    (child) => child.className === "inline-editor alias-chat-form",
   );
   form.children[0].value = "Working title";
   await form.children[0].emit("input");
@@ -684,7 +686,7 @@ test("navigator polling preserves a focused rename draft and restores its action
   await [...windowRef.intervals.values()][0]();
 
   taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
-  form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  form = taskRow.children.find((child) => child.className === "inline-editor alias-chat-form");
   assert.equal(form.children[0].value, "Working title");
   assert.equal(documentRef.activeElement, form.children[0]);
 
@@ -733,7 +735,7 @@ test("a rejected navigator poll preserves the connected focused create editor", 
   assert.equal(documentRef.elements["navigator-projects"].children[0].children[0].children.at(-1).isConnected, true);
 });
 
-test("a rejected navigator poll preserves the connected focused rename editor", async () => {
+test("a rejected navigator poll preserves the connected focused alias editor", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();
   let navigatorReads = 0;
@@ -758,16 +760,16 @@ test("a rejected navigator poll preserves the connected focused rename editor", 
   const taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
   await taskRow.children.at(-1).emit("click");
   const form = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.find(
-    (child) => child.className === "inline-editor rename-chat-form",
+    (child) => child.className === "inline-editor alias-chat-form",
   );
-  form.children[0].value = "Keep renamed draft";
+  form.children[0].value = "Keep alias draft";
   await form.children[0].emit("input");
   form.children[0].focus();
 
   await [...windowRef.intervals.values()][0]();
 
   assert.equal(form.isConnected, true);
-  assert.equal(form.children[0].value, "Keep renamed draft");
+  assert.equal(form.children[0].value, "Keep alias draft");
   assert.equal(documentRef.activeElement, form.children[0]);
 
   await form.children.at(-1).emit("click");
@@ -775,7 +777,7 @@ test("a rejected navigator poll preserves the connected focused rename editor", 
   assert.equal(documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.at(-1).isConnected, true);
 });
 
-test("rename submits the originally opened task after a polling snapshot changes its title", async () => {
+test("alias submits the originally opened task after a polling snapshot changes its title", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();
   const actions = [];
@@ -805,17 +807,17 @@ test("rename submits the originally opened task after a polling snapshot changes
   await taskRow.children.at(-1).emit("click");
   await [...windowRef.intervals.values()][0]();
   taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
-  const form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  const form = taskRow.children.find((child) => child.className === "inline-editor alias-chat-form");
   form.children[0].value = "Requested title";
   await form.emit("submit");
 
   assert.deepEqual(actions, [{
-    kind: "rename_chat", project: "Project", host: "host", task_id: "runtime:task",
-    title: "Original title", new_title: "Requested title",
+    kind: "alias_chat", project: "Project", host: "host", task_id: "runtime:task",
+    title: "Original title", alias: "Requested title",
   }]);
 });
 
-test("rename polling preserves an intentionally empty draft", async () => {
+test("alias polling preserves an intentionally empty draft", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();
   const snapshot = { available: true, projects: [{
@@ -835,18 +837,18 @@ test("rename polling preserves an intentionally empty draft", async () => {
   let taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
   await taskRow.children.at(-1).emit("click");
   taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
-  let form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  let form = taskRow.children.find((child) => child.className === "inline-editor alias-chat-form");
   form.children[0].value = "";
   await form.children[0].emit("input");
 
   await [...windowRef.intervals.values()][0]();
 
   taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
-  form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  form = taskRow.children.find((child) => child.className === "inline-editor alias-chat-form");
   assert.equal(form.children[0].value, "");
 });
 
-test("tasks without a stable identity remain readable but cannot navigate or rename", async () => {
+test("tasks without a stable identity remain readable but cannot navigate or alias", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();
   const actions = [];
@@ -882,7 +884,7 @@ test("tasks without a stable identity remain readable but cannot navigate or ren
 
   assert.deepEqual(actions, []);
   assert.equal(rows.some((row) => row.children.some(
-    (child) => child.className === "inline-editor rename-chat-form",
+    (child) => child.className === "inline-editor alias-chat-form",
   )), false);
 });
 
@@ -926,7 +928,7 @@ test("duplicate project hosts and task titles retain their exact remote action i
   await taskRow.children[0].emit("click");
   await taskRow.children.at(-1).emit("click");
   const form = documentRef.elements["navigator-projects"].children[1].children.at(-1).children[0].children.find(
-    (child) => child.className === "inline-editor rename-chat-form",
+    (child) => child.className === "inline-editor alias-chat-form",
   );
   form.children[0].value = "Renamed";
   await form.emit("submit");
@@ -934,7 +936,7 @@ test("duplicate project hosts and task titles retain their exact remote action i
   assert.deepEqual(actions, [
     { kind: "create_chat", project: "Duplicate", host: "host-b", text: "Start this host" },
     { kind: "navigate", target: "task", project: "Duplicate", host: "host-b", task_id: "1", title: "Same" },
-    { kind: "rename_chat", project: "Duplicate", host: "host-b", task_id: "1", title: "Same", new_title: "Renamed" },
+    { kind: "alias_chat", project: "Duplicate", host: "host-b", task_id: "1", title: "Same", alias: "Renamed" },
   ]);
 });
 

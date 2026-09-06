@@ -174,8 +174,8 @@ function initializePhoneWorkspace({
     navigator: null,
     pollTimer: null,
     refreshing: null,
-    renamingTask: null,
-    renameDrafts: {},
+    aliasingTask: null,
+    aliasDrafts: {},
     restoreFocus: null,
     revision: null,
   };
@@ -386,7 +386,7 @@ function initializePhoneWorkspace({
           ));
         }
         const title = documentRef.createElement("span");
-        title.textContent = task.title;
+        title.textContent = task.display_title || task.title;
         const statusIcon = taskStatusIcon(task.state);
         if (statusIcon) taskMeta.append(statusIcon);
         taskButton.append(title, taskMeta);
@@ -406,74 +406,74 @@ function initializePhoneWorkspace({
             showMessage(elements.conversationMessage, error.message, true);
           }
         });
-        const renameButton = documentRef.createElement("button");
-        renameButton.className = "task-rename";
-        renameButton.type = "button";
-        renameButton.disabled = !taskAvailable;
-        renameButton.setAttribute("aria-label", `Rename ${task.title}`);
-        renameButton.append(svgIcon(
-          "task-rename-icon",
+        const aliasButton = documentRef.createElement("button");
+        aliasButton.className = "task-alias";
+        aliasButton.type = "button";
+        aliasButton.disabled = !taskAvailable;
+        aliasButton.setAttribute("aria-label", `Alias ${task.title}`);
+        aliasButton.append(svgIcon(
+          "task-alias-icon",
           "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z",
         ));
-        renameButton.addEventListener("click", () => {
+        aliasButton.addEventListener("click", () => {
           if (!taskAvailable) return;
-          state.renamingTask = {
+          state.aliasingTask = {
             key: taskKey,
             project: project.name,
             host: project.host || null,
             task_id: task.task_id,
             title: task.title,
           };
-          state.renameDrafts[taskKey] = task.title;
+          state.aliasDrafts[taskKey] = task.title;
           renderNavigator(state.navigator);
         });
-        taskRow.append(taskButton, renameButton);
+        taskRow.append(taskButton, aliasButton);
 
-        if (state.renamingTask?.key === taskKey) {
-          const renameTarget = state.renamingTask;
+        if (state.aliasingTask?.key === taskKey) {
+          const aliasTarget = state.aliasingTask;
           const form = documentRef.createElement("form");
-          form.className = "inline-editor rename-chat-form";
+          form.className = "inline-editor alias-chat-form";
           const input = documentRef.createElement("input");
           input.type = "text";
-          input.value = Object.hasOwn(state.renameDrafts, taskKey)
-            ? state.renameDrafts[taskKey]
+          input.value = Object.hasOwn(state.aliasDrafts, taskKey)
+            ? state.aliasDrafts[taskKey]
             : task.title;
-          input.setAttribute("aria-label", `New title for ${task.title}`);
+          input.setAttribute("aria-label", `Alias for ${task.title}`);
           input.addEventListener("input", () => {
-            state.renameDrafts[taskKey] = input.value;
+            state.aliasDrafts[taskKey] = input.value;
           });
           const submit = documentRef.createElement("button");
           submit.type = "submit";
-          submit.textContent = "Rename";
+          submit.textContent = "Save alias";
           const cancel = documentRef.createElement("button");
           cancel.type = "button";
           cancel.className = "secondary";
           cancel.textContent = "Cancel";
           cancel.addEventListener("click", () => {
-            state.renamingTask = null;
-            delete state.renameDrafts[taskKey];
-            state.restoreFocus = { kind: "rename", key: taskKey };
+            state.aliasingTask = null;
+            delete state.aliasDrafts[taskKey];
+            state.restoreFocus = { kind: "alias", key: taskKey };
             renderNavigator(state.navigator);
           });
           form.addEventListener("submit", async (event) => {
             event.preventDefault();
-            const newTitle = input.value.trim();
-            if (!newTitle || newTitle === renameTarget.title || state.actionBusy) return;
+            const alias = input.value.trim();
+            if (!alias || alias === aliasTarget.title || state.actionBusy) return;
             submit.disabled = true;
             cancel.disabled = true;
             try {
               await performAction({
-                kind: "rename_chat",
-                project: renameTarget.project,
-                host: renameTarget.host,
-                task_id: renameTarget.task_id,
-                title: renameTarget.title,
-                new_title: newTitle,
+                kind: "alias_chat",
+                project: aliasTarget.project,
+                host: aliasTarget.host,
+                task_id: aliasTarget.task_id,
+                title: aliasTarget.title,
+                alias,
               });
-              state.renamingTask = null;
-              delete state.renameDrafts[taskKey];
+              state.aliasingTask = null;
+              delete state.aliasDrafts[taskKey];
               renderNavigator(state.navigator);
-              showMessage(elements.conversationMessage, "Chat renamed. Waiting for Codex to refresh it…");
+              showMessage(elements.conversationMessage, "Local alias saved. It lasts until CodeAway restarts.");
             } catch (error) {
               showMessage(elements.conversationMessage, error.message, true);
               submit.disabled = false;
@@ -484,8 +484,8 @@ function initializePhoneWorkspace({
           taskRow.append(form);
           focusTarget = input;
         }
-        if (state.restoreFocus?.kind === "rename" && state.restoreFocus.key === taskKey) {
-          focusTarget = renameButton;
+        if (state.restoreFocus?.kind === "alias" && state.restoreFocus.key === taskKey) {
+          focusTarget = aliasButton;
           state.restoreFocus = null;
         }
         tasks.append(taskRow);
@@ -568,11 +568,11 @@ function initializePhoneWorkspace({
       }
       if (navigatorResult.status === "fulfilled") {
         state.navigator = navigatorResult.value;
-        if (state.creatingProject === null && state.renamingTask === null) {
+        if (state.creatingProject === null && state.aliasingTask === null) {
           renderNavigator(state.navigator);
         }
       } else {
-        if (state.creatingProject === null && state.renamingTask === null) {
+        if (state.creatingProject === null && state.aliasingTask === null) {
           elements.navigatorProjects.textContent = navigatorResult.reason.message;
         } else {
           showMessage(elements.conversationMessage, navigatorResult.reason.message, true);
