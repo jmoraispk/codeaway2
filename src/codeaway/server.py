@@ -531,18 +531,21 @@ class Application:
         if kind == "rename_chat":
             project = value.get("project")
             host = value.get("host")
+            task_id = value.get("task_id")
             title = value.get("title")
             new_title = value.get("new_title")
             if not isinstance(project, str) or not project.strip():
                 raise ValueError("rename_chat requires a project")
             if host is not None and not isinstance(host, str):
                 raise ValueError("rename_chat host must be a string or null")
+            if not isinstance(task_id, str) or not task_id:
+                raise ValueError("rename_chat requires a task_id")
             if not isinstance(title, str) or not title.strip():
                 raise ValueError("rename_chat requires the current title")
             if not isinstance(new_title, str) or not new_title.strip():
                 raise ValueError("rename_chat requires a nonempty new title")
             backend.rename_chat(
-                self.desktop, target, project, host, title, new_title
+                self.desktop, target, project, host, task_id, title, new_title
             )
             return
         if kind == "click":
@@ -568,9 +571,14 @@ class Application:
             if host is not None and not isinstance(host, str):
                 raise ValueError("navigate host must be a string or null")
             title = value.get("title")
+            task_id = value.get("task_id")
             expanded = value.get("expanded")
-            if navigation_kind == "task" and not isinstance(title, str):
-                raise ValueError("task navigation requires a title")
+            if navigation_kind == "task" and (
+                not isinstance(title, str)
+                or not isinstance(task_id, str)
+                or not task_id
+            ):
+                raise ValueError("task navigation requires a title and task_id")
             if navigation_kind == "project" and not isinstance(expanded, bool):
                 raise ValueError("project navigation requires expanded")
             backend.navigate(
@@ -581,6 +589,7 @@ class Application:
                     project,
                     host=host,
                     title=title,
+                    task_id=task_id,
                     expanded=expanded,
                 ),
             )

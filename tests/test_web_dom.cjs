@@ -94,12 +94,17 @@ class FakeElement {
   get src() {
     return this._src;
   }
+
+  focus() {
+    if (this.ownerDocument) this.ownerDocument.activeElement = this;
+  }
 }
 
 class FakeDocument extends FakeElement {
   constructor(ids, { phone = false } = {}) {
     super("document");
     this.elements = Object.fromEntries(ids.map((id) => [id, new FakeElement(id)]));
+    for (const element of Object.values(this.elements)) element.ownerDocument = this;
     this.phone = phone;
     this.visibilityState = "visible";
     this.checkedRegion = new FakeElement("checked-region");
@@ -116,11 +121,15 @@ class FakeDocument extends FakeElement {
   }
 
   createElement() {
-    return new FakeElement();
+    const element = new FakeElement();
+    element.ownerDocument = this;
+    return element;
   }
 
   createElementNS() {
-    return new FakeElement();
+    const element = new FakeElement();
+    element.ownerDocument = this;
+    return element;
   }
 }
 
@@ -383,10 +392,10 @@ test("phone navigator renders accessible state and worktree icons without status
           {
             name: "Alpha", connected: true, expanded: true, host: "private_3", state: "connected",
             tasks: [
-              { title: "Running", state: "busy", worktree: true, selected: true },
-              { title: "Finished", state: "done", worktree: false, selected: false },
-              { title: "Unclassified", state: "unknown", worktree: true, selected: false },
-              { title: "Waiting", state: "idle", worktree: false, selected: false },
+              { task_id: "0", title: "Running", state: "busy", worktree: true, selected: true },
+              { task_id: "1", title: "Finished", state: "done", worktree: false, selected: false },
+              { task_id: "2", title: "Unclassified", state: "unknown", worktree: true, selected: false },
+              { task_id: "3", title: "Waiting", state: "idle", worktree: false, selected: false },
             ],
           },
           { name: "Beta", connected: false, expanded: false, host: "remote-ssh", state: "busy", tasks: [] },
@@ -480,7 +489,7 @@ test("project action on the right creates a chat from its initial prompt", async
     (child) => child.className === "project-create",
   );
   assert.ok(createButton);
-  assert.equal(createButton.attributes["aria-label"], "New chat in SummonLab");
+  assert.equal(createButton.attributes["aria-label"], "New chat in SummonLab (private_3)");
   assert.equal(projectHeader.children.at(-1), createButton);
 
   await createButton.emit("click");
@@ -522,6 +531,7 @@ test("task action on the right renames its chat", async () => {
           host: "private_3",
           state: "connected",
           tasks: [{
+            task_id: "0",
             title: "Old title",
             state: "unknown",
             worktree: false,
@@ -564,9 +574,141 @@ test("task action on the right renames its chat", async () => {
     kind: "rename_chat",
     project: "SummonLab",
     host: "private_3",
+    task_id: "0",
     title: "Old title",
     new_title: "Clear title",
   }]);
+});
+
+test("navigator polling preserves a focused create draft and restores the project action on cancel", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const snapshot = {
+    available: true,
+    projects: [{
+      name: "SummonLab", connected: true, expanded: true, host: "private_3", state: "connected", tasks: [],
+    }],
+  };
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response(snapshot);
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  let project = documentRef.elements["navigator-projects"].children[0];
+  await project.children[0].children.at(-1).emit("click");
+  let form = documentRef.elements["navigator-projects"].children[0].children.find(
+    (child) => child.className === "inline-editor create-chat-form",
+  );
+  form.children[0].value = "Keep this draft";
+  await form.children[0].emit("input");
+  form.children[0].focus();
+
+  await [...windowRef.intervals.values()][0]();
+
+  project = documentRef.elements["navigator-projects"].children[0];
+  form = project.children.find((child) => child.className === "inline-editor create-chat-form");
+  assert.equal(form.children[0].value, "Keep this draft");
+  assert.equal(documentRef.activeElement, form.children[0]);
+
+  await form.children.at(-1).emit("click");
+  assert.equal(documentRef.activeElement, documentRef.elements["navigator-projects"].children[0].children[0].children.at(-1));
+});
+
+test("navigator polling preserves a focused rename draft and restores its action on cancel", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const snapshot = {
+    available: true,
+    projects: [{
+      name: "SummonLab", connected: true, expanded: true, host: "private_3", state: "connected",
+      tasks: [{ task_id: "0", title: "Draft title", state: "idle", worktree: false, selected: false }],
+    }],
+  };
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response(snapshot);
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  let taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  await taskRow.children.at(-1).emit("click");
+  let form = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.find(
+    (child) => child.className === "inline-editor rename-chat-form",
+  );
+  form.children[0].value = "Working title";
+  await form.children[0].emit("input");
+  form.children[0].focus();
+
+  await [...windowRef.intervals.values()][0]();
+
+  taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  assert.equal(form.children[0].value, "Working title");
+  assert.equal(documentRef.activeElement, form.children[0]);
+
+  await form.children.at(-1).emit("click");
+  assert.equal(documentRef.activeElement, documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.at(-1));
+});
+
+test("duplicate project hosts and task titles retain their exact remote action identity", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const actions = [];
+  const fetchFn = async (path, options = {}) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response({
+      available: true,
+      projects: [
+        { name: "Duplicate", host: "host-a", connected: false, expanded: true, state: "idle", tasks: [{ task_id: "0", title: "Same", state: "idle", worktree: false, selected: false }] },
+        { name: "Duplicate", host: "host-b", connected: false, expanded: true, state: "idle", tasks: [{ task_id: "1", title: "Same", state: "idle", worktree: false, selected: false }] },
+      ],
+    });
+    if (path === "/api/action") {
+      actions.push(JSON.parse(options.body));
+      return response({ revision: 1 });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  const second = documentRef.elements["navigator-projects"].children[1];
+  const header = second.children[0];
+  assert.equal(header.children[0].attributes["aria-label"], "Toggle Duplicate (host-b)");
+  assert.equal(header.children.at(-1).attributes["aria-label"], "New chat in Duplicate (host-b)");
+  assert.equal(header.children.at(-1).className, "project-create");
+  await header.children.at(-1).emit("click");
+  let project = documentRef.elements["navigator-projects"].children[1];
+  let createForm = project.children.find((child) => child.className === "inline-editor create-chat-form");
+  createForm.children[0].value = "Start this host";
+  await createForm.children[0].emit("input");
+  await createForm.emit("submit");
+  project = documentRef.elements["navigator-projects"].children[1];
+  const taskRow = project.children.at(-1).children[0];
+  await taskRow.children[0].emit("click");
+  await taskRow.children.at(-1).emit("click");
+  const form = documentRef.elements["navigator-projects"].children[1].children.at(-1).children[0].children.find(
+    (child) => child.className === "inline-editor rename-chat-form",
+  );
+  form.children[0].value = "Renamed";
+  await form.emit("submit");
+
+  assert.deepEqual(actions, [
+    { kind: "create_chat", project: "Duplicate", host: "host-b", text: "Start this host" },
+    { kind: "navigate", target: "task", project: "Duplicate", host: "host-b", task_id: "1", title: "Same" },
+    { kind: "rename_chat", project: "Duplicate", host: "host-b", task_id: "1", title: "Same", new_title: "Renamed" },
+  ]);
 });
 
 test("phone pointer and composer listeners dispatch validated actions", async () => {

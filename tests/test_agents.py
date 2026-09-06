@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field, replace
 
+import codeaway.agents as agents_module
+
 import pytest
 from PIL import Image
 
@@ -213,6 +215,18 @@ class ActionDesktop:
         self.calls.append(("replace_and_submit", window, point, text))
 
 
+@dataclass
+class StagedActionDesktop(ActionDesktop):
+    stages: tuple[tuple[AccessibilityNode, ...], ...] = ()
+    stage: int = 0
+
+    def accessibility_tree(self, window):
+        self.calls.append(("accessibility_tree", window))
+        nodes = self.stages[min(self.stage, len(self.stages) - 1)]
+        self.stage += 1
+        return list(reversed(nodes))
+
+
 @pytest.fixture
 def fake_desktop(navigator_nodes):
     return ActionDesktop(navigator_nodes)
@@ -378,8 +392,8 @@ def test_codex_inspect_builds_sorted_projects_and_tasks_from_generic_inputs(
         state="connected",
         expanded=True,
         tasks=(
-            TaskSnapshot("Finished task", "done", worktree=True, selected=True),
-            TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+            TaskSnapshot("Finished task", "done", worktree=True, selected=True, task_id="0"),
+            TaskSnapshot("Running task", "busy", worktree=False, selected=False, task_id="1"),
         ),
     )
     assert desktop.capture_regions == [target.surfaces.sidebar.resolve(codex_window.region)]
@@ -418,8 +432,8 @@ def test_codex_inspect_accepts_interleaved_live_class_tokens(
             state="connected",
             expanded=True,
             tasks=(
-                TaskSnapshot("Finished task", "done", worktree=True, selected=True),
-                TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+                TaskSnapshot("Finished task", "done", worktree=True, selected=True, task_id="0"),
+                TaskSnapshot("Running task", "busy", worktree=False, selected=False, task_id="1"),
             ),
         ),
     )
@@ -438,8 +452,8 @@ def test_codex_inspect_never_captures_or_assumes_idle_when_not_foreground(
     snapshot = CodexAgent().inspect(desktop, target)
 
     assert snapshot.projects[0].tasks == (
-        TaskSnapshot("Finished task", "unknown", worktree=True, selected=True),
-        TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+        TaskSnapshot("Finished task", "unknown", worktree=True, selected=True, task_id="0"),
+        TaskSnapshot("Running task", "busy", worktree=False, selected=False, task_id="1"),
     )
     assert desktop.capture_regions == []
 
@@ -459,8 +473,8 @@ def test_codex_inspect_keeps_uia_results_when_optional_marker_capture_fails(
     assert snapshot.available is True
     assert snapshot.source == "accessibility"
     assert snapshot.projects[0].tasks == (
-        TaskSnapshot("Finished task", "unknown", worktree=True, selected=True),
-        TaskSnapshot("Running task", "busy", worktree=False, selected=False),
+        TaskSnapshot("Finished task", "unknown", worktree=True, selected=True, task_id="0"),
+        TaskSnapshot("Running task", "busy", worktree=False, selected=False, task_id="1"),
     )
 
 
@@ -544,7 +558,7 @@ def test_task_markers_ignore_same_y_icons_outside_the_task_row(
     snapshot = CodexAgent().inspect(desktop, target)
 
     assert snapshot.projects[0].tasks[1] == TaskSnapshot(
-        "Running task", "unknown", worktree=False, selected=False
+        "Running task", "unknown", worktree=False, selected=False, task_id="1"
     )
 
 
@@ -660,7 +674,7 @@ def test_task_navigation_invokes_the_task_under_the_named_project(
         fake_desktop,
         codex_target,
         NavigationAction(
-            "task", "SummonLab", host="private_3", title="Finished task"
+            "task", "SummonLab", host="private_3", task_id="0", title="Finished task"
         ),
     )
 
@@ -675,6 +689,14 @@ def test_create_chat_invokes_the_project_action_then_submits_the_prompt(
     fake_desktop, codex_target
 ):
     new_chat = next(node for node in fake_desktop.nodes if node.id == "new-chat")
+    composer = AccessibilityNode(
+        "composer", "EditControl", "Message", "", PixelRegion(450, 650, 300, 30)
+    )
+    ready = tuple(
+        replace(node, class_name=node.class_name.replace(" bg-primary-ghost-hover", ""))
+        for node in fake_desktop.nodes
+    ) + (composer,)
+    fake_desktop = StagedActionDesktop(fake_desktop.nodes, stages=(ready,))
 
     CodexAgent().create_chat(
         fake_desktop,
@@ -688,6 +710,7 @@ def test_create_chat_invokes_the_project_action_then_submits_the_prompt(
         ("activate", codex_target.window),
         ("accessibility_tree", codex_target.window),
         ("accessibility_action", new_chat, AccessibilityAction.INVOKE),
+        ("accessibility_tree", codex_target.window),
         (
             "paste_and_submit",
             codex_target.window,
@@ -708,6 +731,7 @@ def test_rename_chat_selects_the_task_then_replaces_its_header_title(
         codex_target,
         project="SummonLab",
         host="private_3",
+        task_id="0",
         title="Finished task",
         new_title="Clearer title",
     )
@@ -726,6 +750,167 @@ def test_rename_chat_selects_the_task_then_replaces_its_header_title(
             "Clearer title",
         ),
     ]
+
+
+def test_inspect_assigns_distinct_snapshot_relative_ids_to_duplicate_titles(
+    codex_window, navigator_nodes
+):
+    duplicate = replace(
+        next(node for node in navigator_nodes if node.id == "running"),
+        id="duplicate-finished",
+        name="Finished task",
+    )
+    desktop = NavigatorDesktop(
+        navigator_nodes + (duplicate,), Image.new("RGB", (300, 140), "#101010"), foreground=False
+    )
+    target = AgentTarget("codex", codex_window, CodexAgent().default_surfaces(codex_window))
+
+    snapshot = CodexAgent().inspect(desktop, target)
+
+    assert [(task.task_id, task.title) for task in snapshot.projects[0].tasks] == [
+        ("0", "Finished task"),
+        ("1", "Finished task"),
+        ("2", "Running task"),
+    ]
+
+
+def test_task_navigation_invokes_only_the_requested_duplicate_snapshot_row(
+    fake_desktop, codex_target
+):
+    first = replace(next(node for node in fake_desktop.nodes if node.id == "finished"), name="Duplicate")
+    second = replace(next(node for node in fake_desktop.nodes if node.id == "running"), name="Duplicate")
+    fake_desktop.nodes = tuple(
+        node for node in fake_desktop.nodes if node.id not in {"finished", "running"}
+    ) + (first, second)
+
+    CodexAgent().navigate(
+        fake_desktop,
+        codex_target,
+        NavigationAction("task", "SummonLab", host="private_3", task_id="1", title="Duplicate"),
+    )
+
+    assert fake_desktop.calls[-1] == (
+        "accessibility_action", second, AccessibilityAction.INVOKE
+    )
+
+
+def test_task_navigation_rejects_a_stale_identity_before_invoking_any_task(
+    fake_desktop, codex_target
+):
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().navigate(
+            fake_desktop,
+            codex_target,
+            NavigationAction("task", "SummonLab", host="private_3", task_id="9", title="Finished task"),
+        )
+
+    assert not any(call[0] == "accessibility_action" for call in fake_desktop.calls)
+
+
+def test_create_chat_waits_for_a_new_composer_and_cleared_old_selection(
+    navigator_nodes, codex_target
+):
+    composer = AccessibilityNode(
+        "composer", "EditControl", "Message", "", PixelRegion(450, 650, 300, 30)
+    )
+    initially_selected = navigator_nodes
+    stale_selection = navigator_nodes + (composer,)
+    ready = tuple(
+        replace(node, class_name=node.class_name.replace(" bg-primary-ghost-hover", ""))
+        for node in navigator_nodes
+    ) + (composer,)
+    desktop = StagedActionDesktop(navigator_nodes, stages=(initially_selected, stale_selection, ready))
+
+    CodexAgent().create_chat(
+        desktop, codex_target, project="SummonLab", host="private_3", text="Start safely"
+    )
+
+    assert desktop.calls[-1] == (
+        "paste_and_submit", codex_target.window, PixelPoint(700, 659), "Start safely"
+    )
+    assert len([call for call in desktop.calls if call[0] == "accessibility_tree"]) == 3
+
+
+def test_create_chat_timeout_never_types_into_the_previous_chat(
+    monkeypatch, navigator_nodes, codex_target
+):
+    desktop = StagedActionDesktop(navigator_nodes, stages=(navigator_nodes, navigator_nodes))
+    clock = iter((0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().create_chat(
+            desktop, codex_target, project="SummonLab", host="private_3", text="Do not send"
+        )
+
+    assert not any(call[0] == "paste_and_submit" for call in desktop.calls)
+
+
+def test_rename_waits_for_the_exact_duplicate_selection_then_header_editor(
+    navigator_nodes, codex_target
+):
+    first = replace(next(node for node in navigator_nodes if node.id == "finished"), name="Duplicate")
+    second = replace(
+        next(node for node in navigator_nodes if node.id == "running"),
+        name="Duplicate",
+        class_name="sidebar-item py-row-y",
+    )
+    base = tuple(
+        node for node in navigator_nodes if node.id not in {"finished", "running", "header-title", "title-editor"}
+    ) + (first, second)
+    selected = tuple(
+        replace(node, class_name=f"{node.class_name} bg-primary-ghost-hover")
+        if node.id == "running" else node
+        for node in base
+    ) + (
+        replace(next(node for node in navigator_nodes if node.id == "header-title"), name="Duplicate"),
+    )
+    editor = selected + (next(node for node in navigator_nodes if node.id == "title-editor"),)
+    desktop = StagedActionDesktop(base, stages=(base, selected, editor))
+
+    CodexAgent().rename_chat(
+        desktop,
+        codex_target,
+        project="SummonLab",
+        host="private_3",
+        task_id="1",
+        title="Duplicate",
+        new_title="Distinct title",
+    )
+
+    actions = [call for call in desktop.calls if call[0] == "accessibility_action"]
+    assert actions == [
+        ("accessibility_action", second, AccessibilityAction.INVOKE),
+        ("accessibility_action", selected[-1], AccessibilityAction.INVOKE),
+    ]
+    assert desktop.calls[-1] == (
+        "replace_and_submit", codex_target.window, PixelPoint(578, 80), "Distinct title"
+    )
+
+
+def test_rename_timeout_never_types_when_the_requested_task_is_not_selected(
+    monkeypatch, navigator_nodes, codex_target
+):
+    unselected = tuple(
+        replace(node, class_name=node.class_name.replace(" bg-primary-ghost-hover", ""))
+        for node in navigator_nodes
+    )
+    desktop = StagedActionDesktop(unselected, stages=(unselected, unselected))
+    clock = iter((0.0, 1.0))
+    monkeypatch.setattr(agents_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(TargetUnavailable):
+        CodexAgent().rename_chat(
+            desktop,
+            codex_target,
+            project="SummonLab",
+            host="private_3",
+            task_id="0",
+            title="Finished task",
+            new_title="Never type",
+        )
+
+    assert not any(call[0] == "replace_and_submit" for call in desktop.calls)
 
 
 def test_sidebar_click_left_offsets_a_blue_dot(fake_desktop, codex_target):

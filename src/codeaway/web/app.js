@@ -168,12 +168,15 @@ function initializePhoneWorkspace({
   const state = {
     actionBusy: false,
     creatingProject: null,
+    createDrafts: {},
     expanded: {},
     gesture: null,
     navigator: null,
     pollTimer: null,
     refreshing: null,
     renamingTask: null,
+    renameDrafts: {},
+    restoreFocus: null,
     revision: null,
   };
 
@@ -273,6 +276,8 @@ function initializePhoneWorkspace({
       toggle.className = "project-toggle";
       toggle.type = "button";
       toggle.setAttribute("aria-expanded", String(expanded));
+      const projectHost = project.host || "local";
+      toggle.setAttribute("aria-label", `Toggle ${project.name} (${projectHost})`);
       const chevron = svgIcon("project-chevron", "m8 9 4 4 4-4");
       chevron.classList.toggle("expanded", expanded);
       const name = documentRef.createElement("span");
@@ -287,7 +292,7 @@ function initializePhoneWorkspace({
       const createButton = documentRef.createElement("button");
       createButton.className = "project-create";
       createButton.type = "button";
-      createButton.setAttribute("aria-label", `New chat in ${project.name}`);
+      createButton.setAttribute("aria-label", `New chat in ${project.name} (${projectHost})`);
       createButton.append(svgIcon("project-create-icon", "M12 5v14M5 12h14"));
       toggle.append(chevron, name);
       toggle.addEventListener("click", () => {
@@ -297,6 +302,7 @@ function initializePhoneWorkspace({
       createButton.addEventListener("click", () => {
         state.expanded = { ...state.expanded, [projectKey]: true };
         state.creatingProject = projectKey;
+        state.createDrafts[projectKey] = "";
         renderNavigator(state.navigator);
       });
       projectHeader.append(toggle, projectMeta, createButton);
@@ -307,8 +313,12 @@ function initializePhoneWorkspace({
         form.className = "inline-editor create-chat-form";
         const prompt = documentRef.createElement("textarea");
         prompt.rows = 3;
+        prompt.value = state.createDrafts[projectKey] || "";
         prompt.placeholder = `First message for ${project.name}`;
         prompt.setAttribute("aria-label", `First message for ${project.name}`);
+        prompt.addEventListener("input", () => {
+          state.createDrafts[projectKey] = prompt.value;
+        });
         const submit = documentRef.createElement("button");
         submit.type = "submit";
         submit.textContent = "Create chat";
@@ -318,6 +328,8 @@ function initializePhoneWorkspace({
         cancel.textContent = "Cancel";
         cancel.addEventListener("click", () => {
           state.creatingProject = null;
+          delete state.createDrafts[projectKey];
+          state.restoreFocus = { kind: "create", key: projectKey };
           renderNavigator(state.navigator);
         });
         form.addEventListener("submit", async (event) => {
@@ -334,6 +346,7 @@ function initializePhoneWorkspace({
               text,
             });
             state.creatingProject = null;
+            delete state.createDrafts[projectKey];
             renderNavigator(state.navigator);
             showMessage(elements.conversationMessage, "Chat created. Waiting for Codex to index it…");
           } catch (error) {
@@ -344,13 +357,14 @@ function initializePhoneWorkspace({
         });
         form.append(prompt, submit, cancel);
         projectItem.append(form);
+        prompt.focus();
       }
 
       const tasks = documentRef.createElement("div");
       tasks.className = "task-list";
       tasks.hidden = !expanded;
       for (const task of project.tasks) {
-        const taskKey = `${projectKey}\u0000${task.title}`;
+        const taskKey = `${projectKey}\u0000${task.task_id}`;
         const taskRow = documentRef.createElement("div");
         taskRow.className = "task-row";
         const taskButton = documentRef.createElement("button");
@@ -379,6 +393,7 @@ function initializePhoneWorkspace({
               target: "task",
               project: project.name,
               host: project.host || null,
+              task_id: task.task_id,
               title: task.title,
             });
             showMessage(elements.conversationMessage, "");
@@ -396,6 +411,7 @@ function initializePhoneWorkspace({
         ));
         renameButton.addEventListener("click", () => {
           state.renamingTask = taskKey;
+          state.renameDrafts[taskKey] = task.title;
           renderNavigator(state.navigator);
         });
         taskRow.append(taskButton, renameButton);
@@ -405,8 +421,11 @@ function initializePhoneWorkspace({
           form.className = "inline-editor rename-chat-form";
           const input = documentRef.createElement("input");
           input.type = "text";
-          input.value = task.title;
+          input.value = state.renameDrafts[taskKey] || task.title;
           input.setAttribute("aria-label", `New title for ${task.title}`);
+          input.addEventListener("input", () => {
+            state.renameDrafts[taskKey] = input.value;
+          });
           const submit = documentRef.createElement("button");
           submit.type = "submit";
           submit.textContent = "Rename";
@@ -416,6 +435,8 @@ function initializePhoneWorkspace({
           cancel.textContent = "Cancel";
           cancel.addEventListener("click", () => {
             state.renamingTask = null;
+            delete state.renameDrafts[taskKey];
+            state.restoreFocus = { kind: "rename", key: taskKey };
             renderNavigator(state.navigator);
           });
           form.addEventListener("submit", async (event) => {
@@ -426,13 +447,15 @@ function initializePhoneWorkspace({
             cancel.disabled = true;
             try {
               await performAction({
-                kind: "rename_chat",
-                project: project.name,
-                host: project.host || null,
-                title: task.title,
+              kind: "rename_chat",
+              project: project.name,
+              host: project.host || null,
+              task_id: task.task_id,
+              title: task.title,
                 new_title: newTitle,
               });
               state.renamingTask = null;
+              delete state.renameDrafts[taskKey];
               renderNavigator(state.navigator);
               showMessage(elements.conversationMessage, "Chat renamed. Waiting for Codex to refresh it…");
             } catch (error) {
@@ -443,10 +466,19 @@ function initializePhoneWorkspace({
           });
           form.append(input, submit, cancel);
           taskRow.append(form);
+          input.focus();
+        }
+        if (state.restoreFocus?.kind === "rename" && state.restoreFocus.key === taskKey) {
+          renameButton.focus();
+          state.restoreFocus = null;
         }
         tasks.append(taskRow);
       }
       projectItem.append(tasks);
+      if (state.restoreFocus?.kind === "create" && state.restoreFocus.key === projectKey) {
+        createButton.focus();
+        state.restoreFocus = null;
+      }
       elements.navigatorProjects.append(projectItem);
     }
   }

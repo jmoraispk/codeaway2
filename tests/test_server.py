@@ -69,7 +69,7 @@ class FakeAgent:
                     False,
                     "idle",
                     True,
-                    (TaskSnapshot("Task", "idle"),),
+                    (TaskSnapshot("Task", "idle", task_id="0"),),
                 ),
             ),
             captured_at="2026-09-04T00:00:00+00:00",
@@ -95,9 +95,9 @@ class FakeAgent:
         del desktop, target
         self.calls.append(("create_chat", project, host, text))
 
-    def rename_chat(self, desktop, target, project, host, title, new_title):
+    def rename_chat(self, desktop, target, project, host, task_id, title, new_title):
         del desktop, target
-        self.calls.append(("rename_chat", project, host, title, new_title))
+        self.calls.append(("rename_chat", project, host, task_id, title, new_title))
 
 
 @pytest.fixture
@@ -613,8 +613,8 @@ def test_scroll_rejects_zero_or_out_of_range_amounts(app, amount):
             NavigationAction("project", "Project", expanded=False),
         ),
         (
-            b'{"kind":"navigate","target":"task","project":"Project","title":"Task"}',
-            NavigationAction("task", "Project", title="Task"),
+            b'{"kind":"navigate","target":"task","project":"Project","task_id":"0","title":"Task"}',
+            NavigationAction("task", "Project", task_id="0", title="Task"),
         ),
     ],
 )
@@ -630,12 +630,26 @@ def test_task_navigation_preserves_the_project_host_identity(app):
         "POST",
         "/api/action",
         json_headers(),
-        b'{"kind":"navigate","target":"task","project":"Project","host":"remote-ssh","title":"Task"}',
+        b'{"kind":"navigate","target":"task","project":"Project","host":"remote-ssh","task_id":"0","title":"Task"}',
     )
 
     assert response.status == 200
     action = app.fake_agent.calls[0][1]
     assert getattr(action, "host", None) == "remote-ssh"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"kind":"navigate","target":"task","project":"Project","title":"Task"}',
+        b'{"kind":"rename_chat","project":"Project","title":"Task","new_title":"Clear title"}',
+    ],
+)
+def test_task_actions_reject_missing_snapshot_task_identity(app, body):
+    response = app.dispatch("POST", "/api/action", json_headers(), body)
+
+    assert response.status == 400
+    assert app.fake_agent.calls == []
 
 
 def test_create_chat_dispatches_the_project_identity_and_initial_prompt(app):
@@ -655,12 +669,12 @@ def test_rename_chat_dispatches_both_titles_and_the_project_identity(app):
         "POST",
         "/api/action",
         json_headers(),
-        b'{"kind":"rename_chat","project":"Project","host":null,"title":"Task","new_title":"Clear title"}',
+        b'{"kind":"rename_chat","project":"Project","host":null,"task_id":"0","title":"Task","new_title":"Clear title"}',
     )
 
     assert response.status == 200
     assert app.fake_agent.calls == [
-        ("rename_chat", "Project", None, "Task", "Clear title")
+        ("rename_chat", "Project", None, "0", "Task", "Clear title")
     ]
 
 
@@ -669,7 +683,7 @@ def test_navigator_serializes_agent_snapshot(app):
 
     assert response.status == 200
     assert payload(response)["projects"][0]["tasks"] == [
-        {"selected": False, "state": "idle", "title": "Task", "worktree": False}
+        {"selected": False, "state": "idle", "task_id": "0", "title": "Task", "worktree": False}
     ]
 
 

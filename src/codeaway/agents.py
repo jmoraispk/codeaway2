@@ -1,5 +1,6 @@
 import math
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal, Protocol
@@ -36,6 +37,7 @@ class TaskSnapshot:
     state: Literal["done", "busy", "idle", "unknown"]
     worktree: bool = False
     selected: bool = False
+    task_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class NavigationAction:
     project: str
     host: str | None = None
     title: str | None = None
+    task_id: str | None = None
     expanded: bool | None = None
 
 
@@ -109,6 +112,7 @@ class AgentBackend(Protocol):
         target: AgentTarget,
         project: str,
         host: str | None,
+        task_id: str,
         title: str,
         new_title: str,
     ) -> None: ...
@@ -176,6 +180,8 @@ class CodexAgent:
         {"icon-2xs", "text-codex-description", "no-drag", "shrink-0"}
     )
     _BUSY_CLASS_TOKENS = frozenset({"icon-xs", "shrink-0"})
+    _ACTION_WAIT_SECONDS = 0.5
+    _ACTION_POLL_SECONDS = 0.05
 
     def matches(self, window: DesktopWindow) -> bool:
         path = window.process_path.replace("/", "\\").casefold()
@@ -285,6 +291,112 @@ class CodexAgent:
             raise TargetUnavailable(f"project {project!r} is unavailable")
         return projects[0]
 
+    @staticmethod
+    def _task_identity(index: int) -> str:
+        return str(index)
+
+    def _task_node(
+        self,
+        row: _ProjectRow,
+        task_id: str | None,
+        expected_title: str,
+    ) -> AccessibilityNode:
+        if task_id is None:
+            raise TargetUnavailable("task identity is unavailable")
+        task = next(
+            (
+                candidate
+                for index, candidate in enumerate(row.tasks)
+                if self._task_identity(index) == task_id
+            ),
+            None,
+        )
+        if task is None or task.name != expected_title:
+            raise TargetUnavailable(f"task {expected_title!r} is unavailable")
+        return task
+
+    @staticmethod
+    def _is_selected(task: AccessibilityNode) -> bool:
+        return "bg-primary-ghost-hover" in task.class_name
+
+    @staticmethod
+    def _overlaps_region(node: AccessibilityNode, region) -> bool:
+        return (
+            node.region.x < region.x + region.width
+            and region.x < node.region.x + node.region.width
+            and node.region.y < region.y + region.height
+            and region.y < node.region.y + node.region.height
+        )
+
+    def _selected_task_identity(
+        self, row: _ProjectRow
+    ) -> tuple[str, str] | None:
+        for index, task in enumerate(row.tasks):
+            if self._is_selected(task):
+                return self._task_identity(index), task.name
+        return None
+
+    def _wait_for_tree(
+        self,
+        desktop: DesktopBackend,
+        target: AgentTarget,
+        condition,
+        unavailable_message: str,
+    ):
+        deadline = time.monotonic() + self._ACTION_WAIT_SECONDS
+        while True:
+            nodes = desktop.accessibility_tree(target.window)
+            result = condition(nodes)
+            if result is not None:
+                return result
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TargetUnavailable(unavailable_message)
+            time.sleep(min(self._ACTION_POLL_SECONDS, remaining))
+
+    def _header_title_button(
+        self,
+        nodes: list[AccessibilityNode],
+        target: AgentTarget,
+        title: str,
+    ) -> AccessibilityNode | None:
+        sidebar = target.surfaces.sidebar.resolve(target.window.region)
+        header_bottom = target.window.region.y + max(
+            80, round(target.window.region.height * 0.1)
+        )
+        return next(
+            (
+                node
+                for node in nodes
+                if node.name == title
+                and node.role.casefold() in {"button", "buttoncontrol"}
+                and AccessibilityAction.INVOKE in node.actions
+                and node.region.x >= sidebar.x + sidebar.width
+                and node.region.y < header_bottom
+            ),
+            None,
+        )
+
+    def _header_editor(
+        self,
+        nodes: list[AccessibilityNode],
+        target: AgentTarget,
+    ) -> AccessibilityNode | None:
+        sidebar = target.surfaces.sidebar.resolve(target.window.region)
+        header_bottom = target.window.region.y + max(
+            80, round(target.window.region.height * 0.1)
+        )
+        return next(
+            (
+                node
+                for node in nodes
+                if node.role.casefold() in {"edit", "editcontrol"}
+                and node.region.x >= sidebar.x + sidebar.width
+                and node.region.y < header_bottom
+            ),
+            None,
+        )
+
     def _has_class_on_row(
         self,
         task: AccessibilityNode,
@@ -337,7 +449,7 @@ class CodexAgent:
         projects: list[ProjectSnapshot] = []
         for row in self._rows(nodes):
             tasks: list[TaskSnapshot] = []
-            for task in row.tasks:
+            for index, task in enumerate(row.tasks):
                 busy = self._has_class_on_row(task, nodes, self._BUSY_CLASS_TOKENS)
                 state: Literal["done", "busy", "idle", "unknown"]
                 if self._is_done(task, sidebar_region, sidebar_image):
@@ -353,7 +465,8 @@ class CodexAgent:
                         worktree=self._has_class_on_row(
                             task, nodes, self._WORKTREE_CLASS_TOKENS
                         ),
-                        selected="bg-primary-ghost-hover" in task.class_name,
+                        selected=self._is_selected(task),
+                        task_id=self._task_identity(index),
                     )
                 )
             connected = any(
@@ -415,9 +528,7 @@ class CodexAgent:
             return
         if action.title is None:
             raise ValueError("task navigation requires a title")
-        task = next((task for task in project.tasks if task.name == action.title), None)
-        if task is None:
-            raise TargetUnavailable(f"task {action.title!r} is unavailable")
+        task = self._task_node(project, action.task_id, action.title)
         desktop.accessibility_action(task, AccessibilityAction.INVOKE)
 
     def click(
@@ -482,8 +593,36 @@ class CodexAgent:
         )
         if action is None:
             raise TargetUnavailable(f"new chat action for {project!r} is unavailable")
+        previous_selection = self._selected_task_identity(row)
         desktop.accessibility_action(action, AccessibilityAction.INVOKE)
         composer = target.surfaces.composer.resolve(target.window.region)
+
+        def new_chat_ready(post_action_nodes: list[AccessibilityNode]):
+            try:
+                post_action_row = self._project_row(post_action_nodes, project, host)
+            except TargetUnavailable:
+                return None
+            if (
+                previous_selection is not None
+                and self._selected_task_identity(post_action_row) == previous_selection
+            ):
+                return None
+            return next(
+                (
+                    node
+                    for node in post_action_nodes
+                    if node.role.casefold() in {"edit", "editcontrol"}
+                    and self._overlaps_region(node, composer)
+                ),
+                None,
+            )
+
+        self._wait_for_tree(
+            desktop,
+            target,
+            new_chat_ready,
+            f"new chat composer for {project!r} is unavailable",
+        )
         desktop.paste_and_submit(target.window, composer.center, text)
 
     def rename_chat(
@@ -492,48 +631,37 @@ class CodexAgent:
         target: AgentTarget,
         project: str,
         host: str | None,
+        task_id: str,
         title: str,
         new_title: str,
     ) -> None:
         self._activate(desktop, target)
         nodes = desktop.accessibility_tree(target.window)
         row = self._project_row(nodes, project, host)
-        task = next((task for task in row.tasks if task.name == title), None)
-        if task is None:
-            raise TargetUnavailable(f"chat {title!r} is unavailable")
+        task = self._task_node(row, task_id, title)
         desktop.accessibility_action(task, AccessibilityAction.INVOKE)
 
-        nodes = desktop.accessibility_tree(target.window)
-        sidebar = target.surfaces.sidebar.resolve(target.window.region)
-        header_bottom = target.window.region.y + max(
-            80, round(target.window.region.height * 0.1)
+        def selected_header(post_action_nodes: list[AccessibilityNode]):
+            try:
+                post_action_row = self._project_row(post_action_nodes, project, host)
+                selected_task = self._task_node(post_action_row, task_id, title)
+            except TargetUnavailable:
+                return None
+            if not self._is_selected(selected_task):
+                return None
+            return self._header_title_button(post_action_nodes, target, title)
+
+        header = self._wait_for_tree(
+            desktop,
+            target,
+            selected_header,
+            f"title editor for {title!r} is unavailable",
         )
-        header = next(
-            (
-                node
-                for node in nodes
-                if node.name == title
-                and node.role.casefold() in {"button", "buttoncontrol"}
-                and AccessibilityAction.INVOKE in node.actions
-                and node.region.x >= sidebar.x + sidebar.width
-                and node.region.y < header_bottom
-            ),
-            None,
-        )
-        if header is None:
-            raise TargetUnavailable(f"title editor for {title!r} is unavailable")
         desktop.accessibility_action(header, AccessibilityAction.INVOKE)
-        nodes = desktop.accessibility_tree(target.window)
-        editor = next(
-            (
-                node
-                for node in nodes
-                if node.role.casefold() in {"edit", "editcontrol"}
-                and node.region.x >= sidebar.x + sidebar.width
-                and node.region.y < header_bottom
-            ),
-            None,
+        editor = self._wait_for_tree(
+            desktop,
+            target,
+            lambda post_action_nodes: self._header_editor(post_action_nodes, target),
+            f"title editor for {title!r} is unavailable",
         )
-        if editor is None:
-            raise TargetUnavailable(f"title editor for {title!r} is unavailable")
         desktop.replace_and_submit(target.window, editor.region.center, new_title)
