@@ -60,6 +60,3 @@ CodeAway deliberately separates two independent backend axes:
 The server composes one agent backend with one desktop backend. For the first
 release that pair is Codex Desktop on Windows. Agent backends do not contain
 Windows APIs, and desktop backends do not contain Codex-specific behavior.
-
-See the [MVP design](docs/superpowers/specs/2026-09-04-codeaway-mvp-design.md)
-for the approved scope and data flow.
