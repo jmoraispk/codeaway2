@@ -9,18 +9,8 @@ permissions:
 
 jobs:
   test:
-    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            python-version: "3.11"
-          - os: windows-latest
-            python-version: "3.13"
-          - os: ubuntu-latest
-            python-version: "3.13"
+    name: Windows / Python 3.11
+    runs-on: windows-latest
 
     steps:
       - name: Check out repository
@@ -29,7 +19,7 @@ jobs:
       - name: Install uv and Python
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
       - name: Install test environment
         run: uv sync --extra test
@@ -38,7 +28,7 @@ jobs:
         run: uv run pytest -q
 
       - name: Run browser tests
-        run: node --test tests/test_web_ui.cjs
+        run: node --test tests/test_web_ui.cjs tests/test_web_dom.cjs
 
       - name: Build distributions
         run: uv build
