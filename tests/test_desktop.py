@@ -378,6 +378,40 @@ def test_accessibility_tree_converts_native_controls_to_serializable_nodes(nativ
     assert nodes[0].id.startswith("tree-1-")
 
 
+def test_accessibility_tree_keeps_a_native_stable_identity_across_tree_reads(
+    native, desktop_window
+):
+    native.controls = [
+        SimpleNamespace(
+            id="button-1",
+            stable_id="runtime:42:7",
+            role="Button",
+            name="Open",
+            class_name="ToolbarButton",
+            region=PixelRegion(10, 20, 30, 40),
+            depth=2,
+            expanded=None,
+            actions=frozenset({AccessibilityAction.INVOKE}),
+        )
+    ]
+    desktop = WindowsDesktop(native)
+
+    first = desktop.accessibility_tree(desktop_window)[0]
+    second = desktop.accessibility_tree(desktop_window)[0]
+
+    assert first.id != second.id
+    assert getattr(first, "stable_id", None) == "runtime:42:7"
+    assert getattr(second, "stable_id", None) == "runtime:42:7"
+
+
+def test_native_runtime_identity_is_a_stable_opaque_value():
+    control = SimpleNamespace(GetRuntimeId=lambda: (42, 7))
+
+    stable_id = getattr(_WindowsNative, "_control_runtime_id", lambda _: None)(control)
+
+    assert stable_id == "runtime:42:7"
+
+
 def test_accessibility_tree_raises_typed_unavailable_error(native, desktop_window):
     native.accessibility_error = RuntimeError("UI Automation unavailable")
     expected_type = getattr(desktop_module, "AccessibilityUnavailable", RuntimeError)

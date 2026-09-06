@@ -6,6 +6,12 @@ const {
   initializeSetup,
 } = require("../src/codeaway/web/app.js");
 
+function setConnected(element, isConnected) {
+  if (!element || typeof element !== "object") return;
+  element.isConnected = isConnected;
+  for (const child of element.children || []) setConnected(child, isConnected);
+}
+
 class FakeClassList {
   constructor() {
     this.values = new Set();
@@ -64,10 +70,22 @@ class FakeElement {
   }
 
   append(...children) {
+    for (const child of children) {
+      if (child && typeof child === "object") {
+        child.parentElement = this;
+        setConnected(child, Boolean(this.isConnected));
+      }
+    }
     this.children.push(...children);
   }
 
   replaceChildren(...children) {
+    for (const child of children) {
+      if (child && typeof child === "object") {
+        child.parentElement = this;
+        setConnected(child, Boolean(this.isConnected));
+      }
+    }
     this.children = [...children];
     this.textContent = "";
   }
@@ -96,6 +114,7 @@ class FakeElement {
   }
 
   focus() {
+    this.focusedWhileConnected = Boolean(this.isConnected);
     if (this.ownerDocument) this.ownerDocument.activeElement = this;
   }
 }
@@ -180,7 +199,7 @@ function setupDocument() {
 }
 
 function phoneDocument() {
-  return new FakeDocument([
+  const documentRef = new FakeDocument([
     "phone-workspace",
     "composer",
     "composer-input",
@@ -191,6 +210,8 @@ function phoneDocument() {
     "navigator-projects",
     "status-message",
   ], { phone: true });
+  documentRef.elements["navigator-projects"].isConnected = true;
+  return documentRef;
 }
 
 const savedSurfaces = {
@@ -498,6 +519,7 @@ test("project action on the right creates a chat from its initial prompt", async
     (child) => child.className === "inline-editor create-chat-form",
   );
   assert.ok(form);
+  assert.equal(form.children[0].focusedWhileConnected, true);
   form.children[0].value = "Investigate the regression";
   await form.emit("submit");
 
@@ -657,6 +679,77 @@ test("navigator polling preserves a focused rename draft and restores its action
 
   await form.children.at(-1).emit("click");
   assert.equal(documentRef.activeElement, documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0].children.at(-1));
+});
+
+test("rename submits the originally opened task after a polling snapshot changes its title", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const actions = [];
+  let navigatorReads = 0;
+  const fetchFn = async (path, options = {}) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") {
+      navigatorReads += 1;
+      const title = navigatorReads === 1 ? "Original title" : "Refreshed title";
+      return response({ available: true, projects: [{
+        name: "Project", host: "host", connected: false, expanded: true, state: "idle",
+        tasks: [{ task_id: "runtime:task", title, state: "idle", worktree: false, selected: false }],
+      }] });
+    }
+    if (path === "/api/action") {
+      actions.push(JSON.parse(options.body));
+      return response({ revision: 1 });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  let taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  await taskRow.children.at(-1).emit("click");
+  await [...windowRef.intervals.values()][0]();
+  taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  const form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  form.children[0].value = "Requested title";
+  await form.emit("submit");
+
+  assert.deepEqual(actions, [{
+    kind: "rename_chat", project: "Project", host: "host", task_id: "runtime:task",
+    title: "Original title", new_title: "Requested title",
+  }]);
+});
+
+test("rename polling preserves an intentionally empty draft", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const snapshot = { available: true, projects: [{
+    name: "Project", host: "host", connected: false, expanded: true, state: "idle",
+    tasks: [{ task_id: "runtime:task", title: "Original title", state: "idle", worktree: false, selected: false }],
+  }] };
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response(snapshot);
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  let taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  await taskRow.children.at(-1).emit("click");
+  taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  let form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  form.children[0].value = "";
+  await form.children[0].emit("input");
+
+  await [...windowRef.intervals.values()][0]();
+
+  taskRow = documentRef.elements["navigator-projects"].children[0].children.at(-1).children[0];
+  form = taskRow.children.find((child) => child.className === "inline-editor rename-chat-form");
+  assert.equal(form.children[0].value, "");
 });
 
 test("duplicate project hosts and task titles retain their exact remote action identity", async () => {

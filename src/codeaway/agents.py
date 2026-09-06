@@ -37,7 +37,7 @@ class TaskSnapshot:
     state: Literal["done", "busy", "idle", "unknown"]
     worktree: bool = False
     selected: bool = False
-    task_id: str = ""
+    task_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -292,8 +292,8 @@ class CodexAgent:
         return projects[0]
 
     @staticmethod
-    def _task_identity(index: int) -> str:
-        return str(index)
+    def _task_identity(task: AccessibilityNode) -> str | None:
+        return task.stable_id or None
 
     def _task_node(
         self,
@@ -303,17 +303,14 @@ class CodexAgent:
     ) -> AccessibilityNode:
         if task_id is None:
             raise TargetUnavailable("task identity is unavailable")
-        task = next(
-            (
-                candidate
-                for index, candidate in enumerate(row.tasks)
-                if self._task_identity(index) == task_id
-            ),
-            None,
-        )
-        if task is None or task.name != expected_title:
+        tasks = [
+            task
+            for task in row.tasks
+            if self._task_identity(task) == task_id
+        ]
+        if len(tasks) != 1 or tasks[0].name != expected_title:
             raise TargetUnavailable(f"task {expected_title!r} is unavailable")
-        return task
+        return tasks[0]
 
     @staticmethod
     def _is_selected(task: AccessibilityNode) -> bool:
@@ -328,13 +325,42 @@ class CodexAgent:
             and region.y < node.region.y + node.region.height
         )
 
-    def _selected_task_identity(
-        self, row: _ProjectRow
-    ) -> tuple[str, str] | None:
-        for index, task in enumerate(row.tasks):
-            if self._is_selected(task):
-                return self._task_identity(index), task.name
-        return None
+    def _new_chat_fingerprint(
+        self, nodes: list[AccessibilityNode], target: AgentTarget
+    ) -> tuple[frozenset[str], frozenset[str], frozenset[str]] | None:
+        selected: set[str] = set()
+        for row in self._rows(nodes):
+            for task in row.tasks:
+                if not self._is_selected(task):
+                    continue
+                task_id = self._task_identity(task)
+                if task_id is None or task_id in selected:
+                    return None
+                selected.add(task_id)
+        sidebar = target.surfaces.sidebar.resolve(target.window.region)
+        composer = target.surfaces.composer.resolve(target.window.region)
+        header_bottom = target.window.region.y + max(
+            80, round(target.window.region.height * 0.1)
+        )
+        headers: set[str] = set()
+        composers: set[str] = set()
+        for node in nodes:
+            if (
+                node.role.casefold() in {"button", "buttoncontrol"}
+                and node.region.x >= sidebar.x + sidebar.width
+                and node.region.y < header_bottom
+            ):
+                if node.stable_id is None or node.stable_id in headers:
+                    return None
+                headers.add(node.stable_id)
+            if (
+                node.role.casefold() in {"edit", "editcontrol"}
+                and self._overlaps_region(node, composer)
+            ):
+                if node.stable_id is None or node.stable_id in composers:
+                    return None
+                composers.add(node.stable_id)
+        return frozenset(selected), frozenset(headers), frozenset(composers)
 
     def _wait_for_tree(
         self,
@@ -449,7 +475,8 @@ class CodexAgent:
         projects: list[ProjectSnapshot] = []
         for row in self._rows(nodes):
             tasks: list[TaskSnapshot] = []
-            for index, task in enumerate(row.tasks):
+            task_ids = [self._task_identity(task) for task in row.tasks]
+            for task, task_id in zip(row.tasks, task_ids, strict=True):
                 busy = self._has_class_on_row(task, nodes, self._BUSY_CLASS_TOKENS)
                 state: Literal["done", "busy", "idle", "unknown"]
                 if self._is_done(task, sidebar_region, sidebar_image):
@@ -466,7 +493,11 @@ class CodexAgent:
                             task, nodes, self._WORKTREE_CLASS_TOKENS
                         ),
                         selected=self._is_selected(task),
-                        task_id=self._task_identity(index),
+                        task_id=(
+                            task_id
+                            if task_id is not None and task_ids.count(task_id) == 1
+                            else None
+                        ),
                     )
                 )
             connected = any(
@@ -593,25 +624,24 @@ class CodexAgent:
         )
         if action is None:
             raise TargetUnavailable(f"new chat action for {project!r} is unavailable")
-        previous_selection = self._selected_task_identity(row)
+        before_transition = self._new_chat_fingerprint(nodes, target)
         desktop.accessibility_action(action, AccessibilityAction.INVOKE)
         composer = target.surfaces.composer.resolve(target.window.region)
 
         def new_chat_ready(post_action_nodes: list[AccessibilityNode]):
-            try:
-                post_action_row = self._project_row(post_action_nodes, project, host)
-            except TargetUnavailable:
+            post_transition = self._new_chat_fingerprint(post_action_nodes, target)
+            if before_transition is None or post_transition is None:
                 return None
-            if (
-                previous_selection is not None
-                and self._selected_task_identity(post_action_row) == previous_selection
-            ):
+            if before_transition[0] and post_transition[0] == before_transition[0]:
+                return None
+            if post_transition == before_transition:
                 return None
             return next(
                 (
                     node
                     for node in post_action_nodes
                     if node.role.casefold() in {"edit", "editcontrol"}
+                    and node.stable_id is not None
                     and self._overlaps_region(node, composer)
                 ),
                 None,

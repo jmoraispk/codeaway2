@@ -100,6 +100,7 @@ class AccessibilityNode:
     depth: int = 0
     expanded: bool | None = None
     actions: frozenset[AccessibilityAction] = frozenset()
+    stable_id: str | None = None
 
 
 class InputUnavailable(RuntimeError):
@@ -161,6 +162,7 @@ class _NativeControl:
     depth: int
     expanded: bool | None
     actions: frozenset[AccessibilityAction]
+    stable_id: str | None = None
 
 
 class WindowsDesktop:
@@ -220,6 +222,7 @@ class WindowsDesktop:
                         depth=control.depth,
                         expanded=control.expanded,
                         actions=control.actions,
+                        stable_id=control.stable_id,
                     )
                 )
             return nodes
@@ -402,6 +405,7 @@ class _WindowsNative:
                 if region is not None:
                     control_id = f"control-{len(controls)}"
                     actions, expanded = self._capabilities(control, auto)
+                    stable_id = self._control_runtime_id(control)
                     self._controls[control_id] = control
                     controls.append(
                         _NativeControl(
@@ -413,6 +417,7 @@ class _WindowsNative:
                             depth,
                             expanded,
                             actions,
+                            stable_id,
                         )
                     )
             for child in self._children(control):
@@ -420,6 +425,16 @@ class _WindowsNative:
 
         walk(auto.ControlFromHandle(native_handle), 0)
         return controls
+
+    @staticmethod
+    def _control_runtime_id(control: Any) -> str | None:
+        try:
+            runtime_id = control.GetRuntimeId()
+        except Exception:
+            return None
+        if not isinstance(runtime_id, (list, tuple)) or not runtime_id:
+            return None
+        return "runtime:" + ":".join(str(value) for value in runtime_id)
 
     @staticmethod
     def _children(control: Any) -> list[Any]:

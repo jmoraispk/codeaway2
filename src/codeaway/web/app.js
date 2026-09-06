@@ -268,6 +268,7 @@ function initializePhoneWorkspace({
       const expanded = state.expanded[projectKey];
       const projectItem = documentRef.createElement("section");
       projectItem.className = "project";
+      let focusTarget = null;
 
       const projectHeader = documentRef.createElement("div");
       projectHeader.className = "project-header";
@@ -357,7 +358,7 @@ function initializePhoneWorkspace({
         });
         form.append(prompt, submit, cancel);
         projectItem.append(form);
-        prompt.focus();
+        focusTarget = prompt;
       }
 
       const tasks = documentRef.createElement("div");
@@ -410,18 +411,27 @@ function initializePhoneWorkspace({
           "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z",
         ));
         renameButton.addEventListener("click", () => {
-          state.renamingTask = taskKey;
+          state.renamingTask = {
+            key: taskKey,
+            project: project.name,
+            host: project.host || null,
+            task_id: task.task_id,
+            title: task.title,
+          };
           state.renameDrafts[taskKey] = task.title;
           renderNavigator(state.navigator);
         });
         taskRow.append(taskButton, renameButton);
 
-        if (state.renamingTask === taskKey) {
+        if (state.renamingTask?.key === taskKey) {
+          const renameTarget = state.renamingTask;
           const form = documentRef.createElement("form");
           form.className = "inline-editor rename-chat-form";
           const input = documentRef.createElement("input");
           input.type = "text";
-          input.value = state.renameDrafts[taskKey] || task.title;
+          input.value = Object.hasOwn(state.renameDrafts, taskKey)
+            ? state.renameDrafts[taskKey]
+            : task.title;
           input.setAttribute("aria-label", `New title for ${task.title}`);
           input.addEventListener("input", () => {
             state.renameDrafts[taskKey] = input.value;
@@ -442,16 +452,16 @@ function initializePhoneWorkspace({
           form.addEventListener("submit", async (event) => {
             event.preventDefault();
             const newTitle = input.value.trim();
-            if (!newTitle || newTitle === task.title || state.actionBusy) return;
+            if (!newTitle || newTitle === renameTarget.title || state.actionBusy) return;
             submit.disabled = true;
             cancel.disabled = true;
             try {
               await performAction({
-              kind: "rename_chat",
-              project: project.name,
-              host: project.host || null,
-              task_id: task.task_id,
-              title: task.title,
+                kind: "rename_chat",
+                project: renameTarget.project,
+                host: renameTarget.host,
+                task_id: renameTarget.task_id,
+                title: renameTarget.title,
                 new_title: newTitle,
               });
               state.renamingTask = null;
@@ -466,20 +476,21 @@ function initializePhoneWorkspace({
           });
           form.append(input, submit, cancel);
           taskRow.append(form);
-          input.focus();
+          focusTarget = input;
         }
         if (state.restoreFocus?.kind === "rename" && state.restoreFocus.key === taskKey) {
-          renameButton.focus();
+          focusTarget = renameButton;
           state.restoreFocus = null;
         }
         tasks.append(taskRow);
       }
       projectItem.append(tasks);
       if (state.restoreFocus?.kind === "create" && state.restoreFocus.key === projectKey) {
-        createButton.focus();
+        focusTarget = createButton;
         state.restoreFocus = null;
       }
       elements.navigatorProjects.append(projectItem);
+      if (focusTarget !== null) focusTarget.focus();
     }
   }
 
@@ -551,7 +562,9 @@ function initializePhoneWorkspace({
       }
       if (navigatorResult.status === "fulfilled") {
         state.navigator = navigatorResult.value;
-        renderNavigator(state.navigator);
+        if (state.creatingProject === null && state.renamingTask === null) {
+          renderNavigator(state.navigator);
+        }
       } else {
         elements.navigatorProjects.textContent = navigatorResult.reason.message;
       }
