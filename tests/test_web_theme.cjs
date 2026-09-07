@@ -233,9 +233,12 @@ test("navigator status icons keep aligned centers, touch targets, and action spa
       const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
       return JSON.stringify({
         expectedActionSize: rootFontSize * 2.65,
+        expectedActionMinHeight: rootFontSize * 2.65,
         expectedColumnGap: rootFontSize * .5,
         projectActionWidth: projectActionBox.width,
+        projectActionHeight: projectActionBox.height,
         taskActionWidth: taskActionBox.width,
+        taskActionHeight: taskActionBox.height,
         projectStatusCenter: projectStatusBox.left + projectStatusBox.width / 2,
         taskStatusCenter: taskStatusBox.left + taskStatusBox.width / 2,
         projectGap: projectActionBox.left - projectStatusBox.right,
@@ -250,8 +253,12 @@ test("navigator status icons keep aligned centers, touch targets, and action spa
   const tolerance = 0.1;
   assert.ok(Math.abs(layout.projectActionWidth - layout.expectedActionSize) <= tolerance,
     `project create width was ${layout.projectActionWidth}px`);
+  assert.ok(layout.projectActionHeight >= layout.expectedActionMinHeight - tolerance,
+    `project create height was ${layout.projectActionHeight}px`);
   assert.ok(Math.abs(layout.taskActionWidth - layout.expectedActionSize) <= tolerance,
     `task alias width was ${layout.taskActionWidth}px`);
+  assert.ok(layout.taskActionHeight >= layout.expectedActionMinHeight - tolerance,
+    `task alias height was ${layout.taskActionHeight}px`);
   assert.ok(Math.abs(layout.projectActionWidth - layout.taskActionWidth) <= tolerance,
     "project create and task alias widths diverged");
   assert.ok(Math.abs(layout.projectStatusCenter - layout.taskStatusCenter) <= tolerance,
