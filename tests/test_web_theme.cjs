@@ -215,3 +215,49 @@ test("project and task status icons share a horizontal centerline", async () => 
   const positions = JSON.parse(centers);
   assert.equal(positions.task, positions.project);
 });
+
+test("navigator status icons keep aligned centers, touch targets, and action spacing", async () => {
+  const web = await serveWeb();
+  let spacing;
+  try {
+    spacing = await evaluateInDarkEdge(web.url, `(() => {
+      const projectStatus = document.querySelector(".project-meta .status-icon");
+      const projectAction = document.querySelector(".project-create");
+      const taskStatus = document.querySelector(".task-meta .status-icon");
+      const taskAction = document.querySelector(".task-alias");
+      if (!projectStatus || !projectAction || !taskStatus || !taskAction) return false;
+      const projectStatusBox = projectStatus.getBoundingClientRect();
+      const projectActionBox = projectAction.getBoundingClientRect();
+      const taskStatusBox = taskStatus.getBoundingClientRect();
+      const taskActionBox = taskAction.getBoundingClientRect();
+      const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      return JSON.stringify({
+        expectedActionSize: rootFontSize * 2.65,
+        expectedColumnGap: rootFontSize * .5,
+        projectActionWidth: projectActionBox.width,
+        taskActionWidth: taskActionBox.width,
+        projectStatusCenter: projectStatusBox.left + projectStatusBox.width / 2,
+        taskStatusCenter: taskStatusBox.left + taskStatusBox.width / 2,
+        projectGap: projectActionBox.left - projectStatusBox.right,
+        taskGap: taskActionBox.left - taskStatusBox.right,
+      });
+    })()`);
+  } finally {
+    await web.close();
+  }
+
+  const layout = JSON.parse(spacing);
+  const tolerance = 0.1;
+  assert.ok(Math.abs(layout.projectActionWidth - layout.expectedActionSize) <= tolerance,
+    `project create width was ${layout.projectActionWidth}px`);
+  assert.ok(Math.abs(layout.taskActionWidth - layout.expectedActionSize) <= tolerance,
+    `task alias width was ${layout.taskActionWidth}px`);
+  assert.ok(Math.abs(layout.projectActionWidth - layout.taskActionWidth) <= tolerance,
+    "project create and task alias widths diverged");
+  assert.ok(Math.abs(layout.projectStatusCenter - layout.taskStatusCenter) <= tolerance,
+    `status centers diverged: project ${layout.projectStatusCenter}px, task ${layout.taskStatusCenter}px`);
+  assert.ok(layout.projectGap >= layout.expectedColumnGap - tolerance,
+    `project status/action gap was ${layout.projectGap}px`);
+  assert.ok(layout.taskGap >= layout.expectedColumnGap - tolerance,
+    `task status/action gap was ${layout.taskGap}px`);
+});
