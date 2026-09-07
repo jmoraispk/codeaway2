@@ -222,13 +222,19 @@ test("navigator status icons keep aligned centers, touch targets, and action spa
   try {
     spacing = await evaluateInDarkEdge(web.url, `(() => {
       const projectStatus = document.querySelector(".project-meta .status-icon");
+      const projectMeta = document.querySelector(".project-meta");
       const projectAction = document.querySelector(".project-create");
       const taskStatus = document.querySelector(".task-meta .status-icon");
+      const taskMeta = document.querySelector(".task-meta");
+      const task = document.querySelector(".task");
       const taskAction = document.querySelector(".task-alias");
-      if (!projectStatus || !projectAction || !taskStatus || !taskAction) return false;
+      if (!projectStatus || !projectMeta || !projectAction || !taskStatus || !taskMeta || !task || !taskAction) return false;
       const projectStatusBox = projectStatus.getBoundingClientRect();
+      const projectMetaBox = projectMeta.getBoundingClientRect();
       const projectActionBox = projectAction.getBoundingClientRect();
       const taskStatusBox = taskStatus.getBoundingClientRect();
+      const taskMetaBox = taskMeta.getBoundingClientRect();
+      const taskBox = task.getBoundingClientRect();
       const taskActionBox = taskAction.getBoundingClientRect();
       const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
       return JSON.stringify({
@@ -241,8 +247,9 @@ test("navigator status icons keep aligned centers, touch targets, and action spa
         taskActionHeight: taskActionBox.height,
         projectStatusCenter: projectStatusBox.left + projectStatusBox.width / 2,
         taskStatusCenter: taskStatusBox.left + taskStatusBox.width / 2,
-        projectGap: projectActionBox.left - projectStatusBox.right,
-        taskGap: taskActionBox.left - taskStatusBox.right,
+        projectGap: projectActionBox.left - projectMetaBox.right,
+        taskGap: taskActionBox.left - taskMetaBox.right,
+        taskSurfaceGap: taskActionBox.left - taskBox.right,
       });
     })()`);
   } finally {
@@ -267,4 +274,6 @@ test("navigator status icons keep aligned centers, touch targets, and action spa
     `project status/action gap was ${layout.projectGap}px`);
   assert.ok(layout.taskGap >= layout.expectedColumnGap - tolerance,
     `task status/action gap was ${layout.taskGap}px`);
+  assert.ok(Math.abs(layout.taskSurfaceGap) <= tolerance,
+    `task surface/action gap was ${layout.taskSurfaceGap}px`);
 });
