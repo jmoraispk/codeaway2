@@ -152,6 +152,12 @@ class AgentRegistry:
         if title_hint is None:
             return None
         exact_matches = [window for window in candidates if window.title == title_hint]
+        if not candidates:
+            exact_matches = [
+                window
+                for window in windows
+                if window.title == title_hint and agent.matches(window)
+            ]
         if len(exact_matches) != 1:
             return None
         return AgentTarget(agent_id, exact_matches[0], surfaces)

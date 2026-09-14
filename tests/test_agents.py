@@ -690,6 +690,55 @@ def test_registry_resolve_rejects_duplicate_exact_title_windows():
     assert result is None
 
 
+def test_registry_resolve_recovers_after_versioned_app_path_changes():
+    updated_window = DesktopWindow(
+        "updated",
+        1,
+        "Fake Editor",
+        "C:/Apps/Fake_2.0/Fake.exe",
+        PixelRegion(0, 0, 1000, 800),
+    )
+    desktop = FakeDesktop([updated_window])
+    registry = AgentRegistry([FakeAgent()])
+    saved = SurfaceMap(
+        FractionalRegion(0.0, 0.0, 0.1, 1.0),
+        FractionalRegion(0.1, 0.0, 0.8, 0.8),
+        FractionalRegion(0.1, 0.8, 0.8, 0.2),
+    )
+
+    result = registry.resolve(
+        desktop, "fake", "C:/Apps/Fake_1.0/Fake.exe", "Fake Editor", saved
+    )
+
+    assert result == AgentTarget("fake", updated_window, saved)
+
+
+def test_registry_resolve_rejects_ambiguous_versioned_app_path_recovery():
+    windows = [
+        DesktopWindow(
+            f"updated-{index}",
+            index,
+            "Fake Editor",
+            f"C:/Apps/Fake_{index}.0/Fake.exe",
+            PixelRegion(0, 0, 1000, 800),
+        )
+        for index in (2, 3)
+    ]
+    desktop = FakeDesktop(windows)
+    registry = AgentRegistry([FakeAgent()])
+    saved = SurfaceMap(
+        FractionalRegion(0.0, 0.0, 0.1, 1.0),
+        FractionalRegion(0.1, 0.0, 0.8, 0.8),
+        FractionalRegion(0.1, 0.8, 0.8, 0.2),
+    )
+
+    result = registry.resolve(
+        desktop, "fake", "C:/Apps/Fake_1.0/Fake.exe", "Fake Editor", saved
+    )
+
+    assert result is None
+
+
 @pytest.mark.parametrize(
     ("process_path", "title", "expected"),
     [
