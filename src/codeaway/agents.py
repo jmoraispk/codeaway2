@@ -10,11 +10,15 @@ from PIL import Image
 from .desktop import (
     AccessibilityAction,
     AccessibilityNode,
+    AccessibilityUnavailable,
     DesktopBackend,
     DesktopWindow,
     FractionalRegion,
     PixelPoint,
+    SemanticDocument,
+    SemanticNode,
 )
+from .transcript import ObservedMessage, TranscriptObservation
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,10 @@ class AgentBackend(Protocol):
     def default_surfaces(self, window: DesktopWindow) -> SurfaceMap: ...
 
     def inspect(self, desktop: DesktopBackend, target: AgentTarget) -> AgentSnapshot: ...
+
+    def read_transcript(
+        self, desktop: DesktopBackend, target: AgentTarget
+    ) -> TranscriptObservation | None: ...
 
     def navigate(
         self, desktop: DesktopBackend, target: AgentTarget, action: NavigationAction
@@ -659,3 +667,250 @@ class CodexAgent:
             f"new chat composer for {project!r} is unavailable",
         )
         desktop.paste_and_submit(target.window, composer.center, text)
+
+    @staticmethod
+    def _semantic_action_nodes(document: SemanticDocument) -> list[AccessibilityNode]:
+        return [
+            AccessibilityNode(
+                id=node.id,
+                role=node.role,
+                name=node.name,
+                class_name=node.class_name,
+                region=node.region,
+                depth=node.depth,
+                stable_id=node.stable_id,
+            )
+            for node in document.nodes
+            if not node.offscreen and node.region is not None
+        ]
+
+    @staticmethod
+    def _semantic_subtree_end(nodes: tuple[SemanticNode, ...], index: int) -> int:
+        depth = nodes[index].depth
+        for candidate in range(index + 1, len(nodes)):
+            if nodes[candidate].depth <= depth:
+                return candidate
+        return len(nodes)
+
+    def _message_owner(
+        self,
+        nodes: tuple[SemanticNode, ...],
+        container_index: int,
+        marker_index: int,
+    ) -> SemanticNode | None:
+        marker = nodes[marker_index]
+        if marker.name == "You said:":
+            for candidate in nodes[marker_index + 1 :]:
+                if candidate.depth < marker.depth:
+                    break
+                if (
+                    candidate.depth == marker.depth
+                    and candidate.role.casefold() in {"group", "groupcontrol"}
+                    and "bg-user-message" in candidate.class_name.split()
+                ):
+                    return candidate
+        child_depth = nodes[marker_index].depth
+        for index in range(marker_index - 1, container_index, -1):
+            candidate = nodes[index]
+            if candidate.depth >= child_depth:
+                continue
+            child_depth = candidate.depth
+            if candidate.role.casefold() not in {"group", "groupcontrol"}:
+                continue
+            end = self._semantic_subtree_end(nodes, index)
+            marker_roles = {
+                node.name
+                for node in nodes[index + 1 : end]
+                if node.name in {"You said:", "ChatGPT said:"}
+            }
+            if len(marker_roles) == 1:
+                return candidate
+        return None
+
+    def _conversation_identity(
+        self, nodes: tuple[SemanticNode, ...], container_index: int
+    ) -> tuple[str, str]:
+        project_headers = [
+            (index, node)
+            for index, node in enumerate(nodes[:container_index])
+            if node.role.casefold() in {"button", "buttoncontrol"}
+            and node.name.startswith("Project: ")
+        ]
+        if len(project_headers) != 1:
+            raise TargetUnavailable("selected Codex project is unavailable")
+        project_index, project = project_headers[0]
+        title_buttons = [
+            node
+            for node in nodes[project_index + 1 : container_index]
+            if node.role.casefold() in {"button", "buttoncontrol"}
+            and self._has_class_tokens(
+                node.class_name,
+                frozenset({"no-drag", "text-start", "text-base", "font-medium"}),
+            )
+        ]
+        if len(title_buttons) != 1:
+            raise TargetUnavailable("selected Codex task is unavailable")
+        return project.name.removeprefix("Project: ").strip(), title_buttons[0].name
+
+    @staticmethod
+    def _normalize_message_text(text: str, role_label: str) -> str:
+        lines = text.replace("\ufffc", " ").splitlines()
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        if lines and lines[0].strip() == role_label:
+            lines.pop(0)
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        normalized: list[str] = []
+        for line in lines:
+            line = line.rstrip()
+            if normalized and line and line == normalized[-1]:
+                continue
+            normalized.append(line)
+        return "\n".join(normalized)
+
+    def _descendant_message_text(
+        self, nodes: tuple[SemanticNode, ...], owner: SemanticNode
+    ) -> str:
+        owner_index = nodes.index(owner)
+        end = self._semantic_subtree_end(nodes, owner_index)
+        pieces = [
+            node.name
+            for node in nodes[owner_index + 1 : end]
+            if node.role.casefold() in {"text", "textcontrol"}
+            and node.name not in {"You said:", "ChatGPT said:"}
+            and node.name
+        ]
+        return self._join_message_pieces(pieces)
+
+    @staticmethod
+    def _join_message_pieces(pieces: list[str]) -> str:
+        text = ""
+        for piece in pieces:
+            if not text or text[-1].isspace() or piece[0].isspace():
+                text += piece
+            elif piece[0] in (".", ",", ";", ":", "!", "?", ")", "]", "}", '"', "'"):
+                text += piece
+            else:
+                text += "\n" + piece
+        return text
+
+    def _sibling_message_text(
+        self,
+        nodes: tuple[SemanticNode, ...],
+        marker_index: int,
+        message_end: int,
+    ) -> str:
+        marker_depth = nodes[marker_index].depth
+        active_block = False
+        pieces: list[str] = []
+        content_roles = {
+            "document",
+            "documentcontrol",
+            "group",
+            "groupcontrol",
+            "heading",
+            "headingcontrol",
+            "list",
+            "listcontrol",
+            "table",
+            "tablecontrol",
+        }
+        for node in nodes[marker_index + 1 : message_end]:
+            if node.depth < marker_depth:
+                break
+            if node.depth == marker_depth:
+                active_block = node.role.casefold() in content_roles
+            if (
+                active_block
+                and node.role.casefold() in {"text", "textcontrol"}
+                and node.name not in {"You said:", "ChatGPT said:"}
+                and node.name
+            ):
+                pieces.append(node.name)
+        return self._join_message_pieces(pieces)
+
+    def read_transcript(
+        self, desktop: DesktopBackend, target: AgentTarget
+    ) -> TranscriptObservation:
+        document = desktop.semantic_document(target.window)
+        nodes = document.nodes
+        containers = [
+            index
+            for index, node in enumerate(nodes)
+            if "thread-scroll-container" in node.class_name.split()
+        ]
+        if len(containers) != 1:
+            raise AccessibilityUnavailable("Codex conversation is unavailable")
+        container_index = containers[0]
+        project_name, task_title = self._conversation_identity(nodes, container_index)
+        action_nodes = self._semantic_action_nodes(document)
+        selected = [
+            (row, task)
+            for row in self._rows(action_nodes)
+            for task in row.tasks
+            if row.name == project_name and task.name == task_title
+        ]
+        task_identity = f"window:{target.window.native_handle}\0{task_title}"
+        busy = False
+        if len(selected) == 1:
+            row, task = selected[0]
+            task_id = self._task_identity(task)
+            if task_id is not None:
+                task_identity = "\0".join((row.name, row.host or "", task_id))
+            busy = self._has_class_on_row(task, action_nodes, self._BUSY_CLASS_TOKENS)
+        container_end = self._semantic_subtree_end(nodes, container_index)
+        messages: list[ObservedMessage] = []
+        used_owners: set[str] = set()
+        marker_indexes = [
+            index
+            for index in range(container_index + 1, container_end)
+            if "sr-only" in nodes[index].class_name.split()
+            and nodes[index].name in {"You said:", "ChatGPT said:"}
+        ]
+        for marker_offset, marker_index in enumerate(marker_indexes):
+            marker = nodes[marker_index]
+            role = {
+                "You said:": "user",
+                "ChatGPT said:": "assistant",
+            }.get(marker.name)
+            if role is None:
+                continue
+            owner = self._message_owner(nodes, container_index, marker_index)
+            source_id = owner.stable_id if owner is not None else marker.stable_id
+            source_key = owner.id if owner is not None else marker.id
+            if source_key in used_owners:
+                continue
+            used_owners.add(source_key)
+            message_end = (
+                marker_indexes[marker_offset + 1]
+                if marker_offset + 1 < len(marker_indexes)
+                else container_end
+            )
+            if owner is not None:
+                try:
+                    raw_text = desktop.semantic_text(target.window, owner)
+                except AccessibilityUnavailable:
+                    raw_text = self._descendant_message_text(nodes, owner)
+            elif role == "assistant":
+                raw_text = self._sibling_message_text(
+                    nodes, marker_index, message_end
+                )
+            else:
+                continue
+            text = self._normalize_message_text(
+                raw_text, marker.name
+            )
+            if not text:
+                continue
+            state = "complete" if role == "user" else "unknown"
+            if role == "assistant" and busy:
+                state = "streaming"
+            messages.append(ObservedMessage(source_id, role, text, state))
+        return TranscriptObservation(
+            task_identity=task_identity,
+            messages=tuple(messages),
+            captured_at=datetime.now(timezone.utc).isoformat(),
+        )

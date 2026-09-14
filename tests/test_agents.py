@@ -20,10 +20,13 @@ from codeaway.agents import (
 from codeaway.desktop import (
     AccessibilityAction,
     AccessibilityNode,
+    AccessibilityUnavailable,
     DesktopWindow,
     FractionalRegion,
     PixelPoint,
     PixelRegion,
+    SemanticDocument,
+    SemanticNode,
 )
 
 
@@ -214,6 +217,26 @@ class StagedActionDesktop(ActionDesktop):
         return list(reversed(nodes))
 
 
+@dataclass
+class SemanticDesktop:
+    document: SemanticDocument
+    texts: dict[str, str]
+
+    def semantic_document(self, window):
+        del window
+        return self.document
+
+    def semantic_text(self, window, node):
+        del window
+        return self.texts[node.id]
+
+
+class SemanticTextUnavailableDesktop(SemanticDesktop):
+    def semantic_text(self, window, node):
+        del window, node
+        raise AccessibilityUnavailable("no text pattern")
+
+
 @pytest.fixture
 def fake_desktop(navigator_nodes):
     return ActionDesktop(navigator_nodes)
@@ -244,6 +267,340 @@ def test_registry_discovers_matching_agent():
         AgentTarget("fake", desktop_window, fake_agent.default_surfaces(desktop_window))
     ]
     assert fake_desktop.list_windows_calls == 1
+
+
+def _semantic_node(
+    node_id,
+    role,
+    name,
+    class_name,
+    depth,
+    *,
+    stable_id=None,
+    region=None,
+    offscreen=False,
+):
+    return SemanticNode(
+        node_id,
+        role,
+        name,
+        class_name,
+        depth,
+        offscreen,
+        stable_id,
+        region,
+    )
+
+
+def codex_conversation_document(*, busy=True):
+    nodes = [
+        _semantic_node(
+            "project",
+            "ButtonControl",
+            "SummonLab private_3",
+            "group/folder-row sidebar-item",
+            2,
+            region=PixelRegion(100, 100, 300, 30),
+        ),
+        _semantic_node(
+            "project-action",
+            "ButtonControl",
+            "Start new chat in SummonLab",
+            "",
+            3,
+            region=PixelRegion(350, 100, 30, 30),
+        ),
+        _semantic_node(
+            "selected-task",
+            "ButtonControl",
+            "Live transcript work",
+            (
+                "group hover:bg-primary-ghost-hover "
+                "data-[app-action-sidebar-thread-selected=true]:bg-primary-ghost-hover "
+                "sidebar-item py-row-y"
+            ),
+            3,
+            stable_id="runtime:task-7",
+            region=PixelRegion(100, 140, 300, 30),
+        ),
+        _semantic_node(
+            "other-task",
+            "ButtonControl",
+            "Another task",
+            (
+                "group hover:bg-primary-ghost-hover "
+                "data-[app-action-sidebar-thread-selected=true]:bg-primary-ghost-hover "
+                "sidebar-item py-row-y"
+            ),
+            3,
+            stable_id="runtime:task-8",
+            region=PixelRegion(100, 175, 300, 30),
+        ),
+        _semantic_node(
+            "header",
+            "GroupControl",
+            "",
+            "app-header",
+            2,
+            region=PixelRegion(410, 40, 650, 50),
+        ),
+        _semantic_node(
+            "header-project",
+            "ButtonControl",
+            "Project: SummonLab",
+            "button-toolbar",
+            3,
+            region=PixelRegion(420, 50, 40, 30),
+        ),
+        _semantic_node(
+            "header-title-group",
+            "GroupControl",
+            "",
+            "truncate",
+            3,
+            region=PixelRegion(465, 50, 300, 30),
+        ),
+        _semantic_node(
+            "header-title",
+            "ButtonControl",
+            "Live transcript work",
+            "no-drag text-start text-base font-medium",
+            4,
+            region=PixelRegion(465, 50, 300, 30),
+        ),
+    ]
+    if busy:
+        nodes.append(
+            _semantic_node(
+                "busy",
+                "ImageControl",
+                "",
+                "icon-xs shrink-0",
+                4,
+                region=PixelRegion(370, 145, 12, 12),
+            )
+        )
+    nodes.extend(
+        (
+            _semantic_node(
+                "conversation",
+                "GroupControl",
+                "",
+                "thread-scroll-container relative flex flex-col",
+                2,
+                region=PixelRegion(410, 100, 650, 600),
+            ),
+            _semantic_node(
+                "user-role",
+                "TextControl",
+                "You said:",
+                "sr-only select-none",
+                3,
+            ),
+            _semantic_node(
+                "user-role-copy",
+                "TextControl",
+                "You said:",
+                "",
+                4,
+                offscreen=True,
+            ),
+            _semantic_node(
+                "user-group",
+                "GroupControl",
+                "",
+                "group bg-user-message",
+                3,
+                stable_id="runtime:user-1",
+            ),
+            _semantic_node(
+                "user-text",
+                "TextControl",
+                "Can you help?",
+                "",
+                4,
+            ),
+            _semantic_node(
+                "assistant-group",
+                "GroupControl",
+                "",
+                "group flex min-w-0 flex-col",
+                3,
+                stable_id="runtime:assistant-1",
+            ),
+            _semantic_node(
+                "assistant-role",
+                "TextControl",
+                "ChatGPT said:",
+                "sr-only select-none",
+                4,
+            ),
+            _semantic_node(
+                "assistant-role-copy",
+                "TextControl",
+                "ChatGPT said:",
+                "",
+                5,
+                offscreen=True,
+            ),
+            _semantic_node(
+                "assistant-text",
+                "TextControl",
+                "Working on it",
+                "",
+                4,
+            ),
+        )
+    )
+    return SemanticDocument(tuple(nodes))
+
+
+def test_codex_transcript_reads_user_and_streaming_assistant_messages(codex_target):
+    desktop = SemanticDesktop(
+        codex_conversation_document(),
+        {
+            "user-group": "You said:\nCan you help?",
+            "assistant-group": "ChatGPT said:\nWorking on it",
+        },
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert result.task_identity == "SummonLab\0private_3\0runtime:task-7"
+    assert [
+        (message.source_id, message.role, message.text, message.state)
+        for message in result.messages
+    ] == [
+        ("runtime:user-1", "user", "Can you help?", "complete"),
+        ("runtime:assistant-1", "assistant", "Working on it", "streaming"),
+    ]
+
+
+def test_codex_transcript_reconstructs_descendant_text_without_a_text_pattern(
+    codex_target,
+):
+    desktop = SemanticTextUnavailableDesktop(codex_conversation_document(), {})
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert [(message.role, message.text) for message in result.messages] == [
+        ("user", "Can you help?"),
+        ("assistant", "Working on it"),
+    ]
+
+
+def test_codex_transcript_reads_an_unwrapped_assistant_message(codex_target):
+    rebuilt = []
+    for node in codex_conversation_document().nodes:
+        if node.id == "assistant-group":
+            continue
+        if node.id == "assistant-role":
+            rebuilt.append(replace(node, depth=3, stable_id="runtime:assistant-marker"))
+            continue
+        if node.id == "assistant-role-copy":
+            rebuilt.append(replace(node, depth=4))
+            continue
+        if node.id == "assistant-text":
+            rebuilt.append(
+                _semantic_node(
+                    "assistant-paragraph",
+                    "GroupControl",
+                    "",
+                    "_Paragraph_example",
+                    3,
+                )
+            )
+            rebuilt.append(replace(node, depth=4))
+            continue
+        rebuilt.append(node)
+    desktop = SemanticTextUnavailableDesktop(SemanticDocument(tuple(rebuilt)), {})
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert (
+        result.messages[-1].source_id,
+        result.messages[-1].role,
+        result.messages[-1].text,
+        result.messages[-1].state,
+    ) == ("runtime:assistant-marker", "assistant", "Working on it", "streaming")
+
+
+def test_codex_transcript_normalizes_object_markers_and_adjacent_duplicate_lines(
+    codex_target,
+):
+    desktop = SemanticDesktop(
+        codex_conversation_document(),
+        {
+            "user-group": "You said:\nCan you help?",
+            "assistant-group": (
+                "ChatGPT said:\nAlpha\ufffcBeta\nCopy\nCopy\nFinal line\n"
+            ),
+        },
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert result.messages[-1].text == "Alpha Beta\nCopy\nFinal line"
+
+
+def test_codex_transcript_ignores_a_role_without_a_unique_message_group(codex_target):
+    document = codex_conversation_document()
+    nodes = tuple(
+        replace(node, role="TextControl") if node.id == "user-group" else node
+        for node in document.nodes
+    )
+    desktop = SemanticDesktop(
+        SemanticDocument(nodes),
+        {"assistant-group": "ChatGPT said:\nWorking on it"},
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert [(message.role, message.text) for message in result.messages] == [
+        ("assistant", "Working on it")
+    ]
+
+
+def test_codex_transcript_reports_a_missing_conversation_container(codex_target):
+    document = codex_conversation_document()
+    nodes = tuple(node for node in document.nodes if node.id != "conversation")
+    desktop = SemanticDesktop(SemanticDocument(nodes), {})
+
+    with pytest.raises(AccessibilityUnavailable, match="conversation"):
+        CodexAgent().read_transcript(desktop, codex_target)
+
+
+def test_codex_transcript_uses_unknown_for_an_idle_final_assistant(codex_target):
+    desktop = SemanticDesktop(
+        codex_conversation_document(busy=False),
+        {
+            "user-group": "You said:\nCan you help?",
+            "assistant-group": "ChatGPT said:\nFinished answer",
+        },
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert result.messages[-1].state == "unknown"
+
+
+def test_codex_transcript_fallback_identity_includes_window_and_task_title(codex_target):
+    document = codex_conversation_document()
+    nodes = tuple(
+        replace(node, stable_id=None) if node.id == "selected-task" else node
+        for node in document.nodes
+    )
+    desktop = SemanticDesktop(
+        SemanticDocument(nodes),
+        {
+            "user-group": "You said:\nCan you help?",
+            "assistant-group": "ChatGPT said:\nWorking on it",
+        },
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert result.task_identity == "window:41\0Live transcript work"
 
 
 def test_registry_resolve_prefers_exact_title_and_saved_surfaces():
