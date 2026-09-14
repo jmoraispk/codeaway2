@@ -66,11 +66,39 @@ Tailscale address and calibration.
 
 From the phone workspace you can:
 
-- Tap a task to open it, then read, scroll, click, and send messages remotely.
+- Tap a task to open it, then read its live, selectable transcript and send
+  messages remotely. New transcript text is checked every second and only the
+  incremental changes are transferred after the first snapshot.
 - Tap the **+** at the far right of a project, enter its first prompt, and
   select **Create chat**. CodeAway creates the task and sends that prompt so
   Codex can index it immediately.
 - Tap the pencil at the far right of a task to save a session-only local alias.
+- Open **Screen controls** only when you need the visual fallback for clicking
+  or swiping the Codex window. The screenshot is not fetched while this section
+  is closed; opening it or selecting **Refresh screen** requests a fresh image.
+
+CodeAway keeps transcript reconciliation in memory only; it does not save chat
+text to disk. Codex exposes the currently selected conversation through Windows
+accessibility, so CodeAway retains messages it has already observed during the
+current process but does not provide a permanent cross-task transcript archive.
+
+## Verify the live phone flow
+
+1. Start CodeAway with `uvx codeaway --ip <laptop-ip>` and keep Codex Desktop
+   visible.
+2. Open the printed URL on the phone and select a Codex task.
+3. Send a prompt that produces a multi-paragraph response.
+4. Confirm the assistant text grows on the phone across successive one-second
+   updates.
+5. Select and copy some transcript text on the phone.
+6. Scroll the transcript upward, confirm incoming text does not move your
+   position, then select **New text** to return to the latest output.
+7. With **Screen controls** closed, confirm normal transcript use does not load
+   a conversation image.
+8. Open **Screen controls**, select **Refresh screen**, then test tapping and
+   swiping the image.
+9. Close **Screen controls** and confirm later transcript updates do not fetch
+   another image.
 
 ## Platform support
 
