@@ -25,6 +25,11 @@ from codeaway.agents import (
 from codeaway.config import AppConfig, load_config
 from codeaway.desktop import DesktopWindow, FractionalRegion, PixelRegion
 from codeaway.server import AppState, Application, make_handler
+from codeaway.transcript import (
+    TranscriptEvent,
+    TranscriptMessage,
+    TranscriptResult,
+)
 
 
 @dataclass
@@ -95,6 +100,20 @@ class FakeAgent:
         del desktop, target
         self.calls.append(("create_chat", project, host, text))
 
+
+@dataclass
+class FakeTranscriptService:
+    result: TranscriptResult = TranscriptResult("pending", None, 0)
+    poll_calls: list[tuple[str | None, int | None]] = field(default_factory=list)
+    close_calls: int = 0
+
+    def poll(self, stream_id, after):
+        self.poll_calls.append((stream_id, after))
+        return self.result
+
+    def close(self):
+        self.close_calls += 1
+
 @pytest.fixture
 def selected_window():
     return DesktopWindow(
@@ -111,15 +130,18 @@ def app(tmp_path, selected_window):
     desktop = FakeDesktop([selected_window])
     agent = FakeAgent()
     target = AgentTarget("fake", selected_window, agent.default_surfaces(selected_window))
+    transcript = FakeTranscriptService()
     application = Application(
         AppState(AppConfig(), target),
         AgentRegistry([agent]),
         {agent.id: agent},
         desktop,
         tmp_path / "config.json",
+        transcript_service=transcript,
     )
     application.fake_desktop = desktop
     application.fake_agent = agent
+    application.fake_transcript = transcript
     return application
 
 
@@ -162,34 +184,129 @@ def test_status_reports_selection_readiness_and_revision(app):
     }
 
 
-def test_status_advances_revision_when_conversation_pixels_change_without_action(app):
-    first = payload(app.dispatch("GET", "/api/status", {}, b""))
-    unchanged = payload(app.dispatch("GET", "/api/status", {}, b""))
-    app.fake_desktop.capture_color = "#abcdef"
-    changed = payload(app.dispatch("GET", "/api/status", {}, b""))
-    capture_count = len(app.fake_desktop.capture_calls)
+def test_status_never_captures_conversation_pixels(app):
+    response = app.dispatch("GET", "/api/status", {}, b"")
 
-    screenshot = app.dispatch("GET", "/api/screenshot/conversation", {}, b"")
+    assert response.status == 200
+    assert app.fake_desktop.capture_calls == []
 
-    assert [first["revision"], unchanged["revision"], changed["revision"]] == [
-        0,
-        0,
-        1,
-    ]
-    assert len(app.fake_desktop.capture_calls) == capture_count
-    with Image.open(BytesIO(screenshot.body)) as image:
-        assert image.getpixel((0, 0)) == (171, 205, 239)
 
-    action = app.dispatch(
-        "POST", "/api/action", json_headers(), b'{"kind":"scroll","amount":-2}'
+def test_transcript_route_forwards_cursor_and_serializes_delta(app):
+    app.fake_transcript.result = TranscriptResult(
+        mode="delta",
+        stream_id="stream-a",
+        revision=4,
+        events=(TranscriptEvent("text_appended", "message-1", text=" new"),),
+        captured_at="2026-09-14T23:00:01+00:00",
     )
-    app.fake_desktop.capture_color = "#fedcba"
-    refreshed = app.dispatch("GET", "/api/screenshot/conversation", {}, b"")
 
-    assert payload(action)["revision"] == 2
-    assert len(app.fake_desktop.capture_calls) == capture_count + 1
-    with Image.open(BytesIO(refreshed.body)) as image:
-        assert image.getpixel((0, 0)) == (254, 220, 186)
+    response = app.dispatch(
+        "GET", "/api/transcript?stream=stream-a&after=3", {}, b""
+    )
+
+    assert response.status == 200
+    assert app.fake_transcript.poll_calls == [("stream-a", 3)]
+    assert payload(response)["events"] == [
+        {"kind": "text_appended", "message_id": "message-1", "text": " new"}
+    ]
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_transcript_route_serializes_snapshot_and_omits_none_values(app):
+    app.fake_transcript.result = TranscriptResult(
+        mode="snapshot",
+        stream_id="stream-a",
+        revision=1,
+        messages=(
+            TranscriptMessage(
+                "message-1", None, "assistant", "Hello", "streaming"
+            ),
+        ),
+        captured_at="2026-09-14T23:00:00+00:00",
+    )
+
+    response = app.dispatch("GET", "/api/transcript", {}, b"")
+
+    assert app.fake_transcript.poll_calls == [(None, None)]
+    assert payload(response)["messages"] == [
+        {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Hello",
+            "state": "streaming",
+        }
+    ]
+
+
+def test_transcript_route_returns_pending_and_stale_metadata(app):
+    app.fake_transcript.result = TranscriptResult(
+        "pending",
+        None,
+        0,
+        stale=True,
+        error="Transcript updating is delayed.",
+    )
+
+    response = app.dispatch("GET", "/api/transcript", {}, b"")
+
+    assert payload(response) == {
+        "mode": "pending",
+        "revision": 0,
+        "messages": [],
+        "events": [],
+        "stale": True,
+        "error": "Transcript updating is delayed.",
+    }
+
+
+def test_transcript_route_returns_no_content_when_unchanged(app):
+    app.fake_transcript.result = TranscriptResult(
+        "unchanged", "stream-a", 4, captured_at="now"
+    )
+
+    response = app.dispatch(
+        "GET", "/api/transcript?stream=stream-a&after=4", {}, b""
+    )
+
+    assert response.status == 204
+    assert response.body == b""
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/api/transcript?after=-1",
+        "/api/transcript?after=nope",
+        "/api/transcript?after=1&after=2",
+        "/api/transcript?stream=a&stream=b",
+        "/api/transcript?unknown=1",
+        "/api/transcript?stream=a",
+        "/api/transcript?after=1",
+    ),
+)
+def test_transcript_route_rejects_invalid_cursors(app, path):
+    response = app.dispatch("GET", path, {}, b"")
+
+    assert response.status == 400
+    assert payload(response)["error"]["code"] == "invalid_request"
+    assert app.fake_transcript.poll_calls == []
+
+
+def test_backend_without_transcript_capability_keeps_route_pending(app):
+    assert app._sample_transcript() is None
+
+    response = app.dispatch("GET", "/api/transcript", {}, b"")
+
+    assert response.status == 200
+    assert payload(response)["mode"] == "pending"
+
+
+def test_application_close_is_idempotent(app):
+    app.close()
+    app.close()
+
+    assert app.fake_transcript.close_calls == 1
 
 
 def test_windows_returns_compatible_discovery_results(app):

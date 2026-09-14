@@ -38,6 +38,7 @@ class Runtime:
     config_path_factory: Callable[[], str | Path] = default_config_path
     desktop_factory: Callable[[], object] = _desktop
     registry_factory: Callable[[Sequence[object]], object] = _registry
+    application_factory: Callable = Application
 
 
 @dataclass(frozen=True)
@@ -153,7 +154,7 @@ def start(
         )
         return StartResult(1, None)
     state = AppState(config, target)
-    application = Application(
+    application = runtime.application_factory(
         state,
         registry,
         {agent.id: agent},
@@ -166,10 +167,12 @@ def start(
         server = runtime.server_factory((address, port), handler)
     except OSError as error:
         if options.ip is not None:
+            application.close()
             _print_bind_error("explicit", address, port, error)
             return StartResult(1, None)
         if _is_loopback(address):
             source = "cached" if config_existed else "default"
+            application.close()
             _print_bind_error(source, address, port, error)
             return StartResult(1, None)
         print(
@@ -181,6 +184,7 @@ def start(
         try:
             server = runtime.server_factory((address, port), handler)
         except OSError as fallback_error:
+            application.close()
             _print_bind_error("fallback", address, port, fallback_error)
             return StartResult(1, None)
 
@@ -190,6 +194,7 @@ def start(
         save_config(config_path, persisted)
     except OSError as error:
         server.server_close()
+        application.close()
         print(f"Could not save CodeAway configuration: {error}", file=sys.stderr)
         return StartResult(1, None)
     state.config = persisted
@@ -205,6 +210,7 @@ def start(
 
     if not _serve:
         server.server_close()
+        application.close()
         return StartResult(0, url)
 
     try:
@@ -214,6 +220,7 @@ def start(
     finally:
         server.shutdown()
         server.server_close()
+        application.close()
     return StartResult(0, url)
 
 

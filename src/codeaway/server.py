@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -13,7 +12,7 @@ from io import BytesIO
 from numbers import Real
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from .agents import (
     AgentBackend,
@@ -31,6 +30,7 @@ from .desktop import (
     FractionalRegion,
     InputUnavailable,
 )
+from .transcript import TranscriptResult, TranscriptService
 
 
 _MAX_JSON_BODY = 65_536
@@ -58,9 +58,6 @@ class AppState:
     revision: int = 0
     state_lock: threading.RLock = field(default_factory=threading.RLock)
     action_lock: threading.Lock = field(default_factory=threading.Lock)
-    conversation_png: bytes | None = None
-    conversation_digest: bytes | None = None
-    conversation_token: tuple[object, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +77,8 @@ class Application:
         agents: Mapping[str, AgentBackend],
         desktop: DesktopBackend,
         config_path: str | Path,
+        *,
+        transcript_service: Any | None = None,
     ) -> None:
         self.state = state
         self.registry = registry
@@ -88,6 +87,10 @@ class Application:
         self.config_path = Path(config_path)
         self._discovered_targets: dict[str, AgentTarget] = {}
         self._task_aliases: dict[_TaskAliasIdentity, str] = {}
+        self._transcript_service = transcript_service or TranscriptService(
+            self._sample_transcript
+        )
+        self._closed = False
 
     @staticmethod
     def _json_response(status: int, value: Any) -> Response:
@@ -268,49 +271,91 @@ class Application:
             self.state.target = current
         return current
 
-    def _clear_conversation_cache_locked(self) -> None:
-        self.state.conversation_png = None
-        self.state.conversation_digest = None
-        self.state.conversation_token = None
-
     def _capture_png(self, region) -> bytes:
         image = self.desktop.capture(region)
         output = BytesIO()
         image.save(output, format="PNG")
         return output.getvalue()
 
-    def _observe_conversation_locked(self, target: AgentTarget) -> None:
-        region = target.surfaces.conversation.resolve(target.window.region)
-        try:
-            png = self._capture_png(region)
-        except Exception:
-            return
-        digest = hashlib.sha256(png).digest()
-        token = self._selection_token(target)
-        with self.state.state_lock:
-            if self._selection_token(self.state.target) != token:
-                return
-            if (
-                self.state.conversation_token == token
-                and self.state.conversation_digest is not None
-                and self.state.conversation_digest != digest
-            ):
-                self.state.revision += 1
-            self.state.conversation_png = png
-            self.state.conversation_digest = digest
-            self.state.conversation_token = token
-
     def _backend(self, target: AgentTarget) -> AgentBackend | None:
         return self.agents.get(target.agent_id)
 
-    def _status(self) -> Response:
+    def _sample_transcript(self):
         with self.state.action_lock:
             target = self._current_target()
             if target is None:
-                with self.state.state_lock:
-                    self._clear_conversation_cache_locked()
-            else:
-                self._observe_conversation_locked(target)
+                return None
+            selection_token = self._selection_token(target)
+            backend = self._backend(target)
+            reader = getattr(backend, "read_transcript", None)
+            if reader is None:
+                return None
+            observation = reader(self.desktop, target)
+            with self.state.state_lock:
+                if self._selection_token(self.state.target) != selection_token:
+                    return None
+            return observation
+
+    @staticmethod
+    def _without_none(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: Application._without_none(item)
+                for key, item in value.items()
+                if item is not None
+            }
+        if isinstance(value, (list, tuple)):
+            return [Application._without_none(item) for item in value]
+        return value
+
+    def _transcript(self, query: str) -> Response:
+        try:
+            values = parse_qs(query, keep_blank_values=True, strict_parsing=True)
+        except ValueError:
+            return self._error(400, "invalid_request", "Transcript cursor is invalid.")
+        if set(values) - {"stream", "after"} or any(
+            len(items) != 1 for items in values.values()
+        ):
+            return self._error(400, "invalid_request", "Transcript cursor is invalid.")
+        if bool("stream" in values) != bool("after" in values):
+            return self._error(400, "invalid_request", "Transcript cursor is invalid.")
+        stream_id = None
+        after = None
+        if "stream" in values:
+            stream_id = values["stream"][0]
+            if not stream_id:
+                return self._error(
+                    400, "invalid_request", "Transcript cursor is invalid."
+                )
+            try:
+                after = int(values["after"][0])
+            except ValueError:
+                return self._error(
+                    400, "invalid_request", "Transcript cursor is invalid."
+                )
+            if after < 0 or str(after) != values["after"][0]:
+                return self._error(
+                    400, "invalid_request", "Transcript cursor is invalid."
+                )
+        result: TranscriptResult = self._transcript_service.poll(stream_id, after)
+        headers = {"Cache-Control": "no-store"}
+        if result.mode == "unchanged":
+            return Response(204, "application/json; charset=utf-8", b"", headers)
+        response = self._json_response(
+            200, self._without_none(asdict(result))
+        )
+        return replace(response, headers=headers)
+
+    def close(self) -> None:
+        with self.state.state_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._transcript_service.close()
+
+    def _status(self) -> Response:
+        with self.state.action_lock:
+            self._current_target()
             return self._status_locked()
 
     def _status_locked(self) -> Response:
@@ -392,7 +437,6 @@ class Application:
             return self._error(409, "target_unavailable", "Selected window is unavailable.")
         with self.state.state_lock:
             self.state.target = target
-            self._clear_conversation_cache_locked()
             self.state.revision += 1
             revision = self.state.revision
         return self._json_response(200, {"revision": revision})
@@ -412,29 +456,10 @@ class Application:
             if surface_name == "window"
             else getattr(target.surfaces, surface_name).resolve(target.window.region)
         )
-        token = self._selection_token(target)
-        if surface_name == "conversation":
-            with self.state.state_lock:
-                if (
-                    self.state.conversation_token == token
-                    and self.state.conversation_png is not None
-                ):
-                    return Response(
-                        200,
-                        "image/png",
-                        self.state.conversation_png,
-                        {"Cache-Control": "no-store"},
-                    )
         try:
             png = self._capture_png(region)
         except Exception:
             return self._error(503, "screenshot_failed", "Screenshot capture failed.")
-        if surface_name == "conversation":
-            with self.state.state_lock:
-                if self._selection_token(self.state.target) == token:
-                    self.state.conversation_png = png
-                    self.state.conversation_digest = hashlib.sha256(png).digest()
-                    self.state.conversation_token = token
         return Response(200, "image/png", png, {"Cache-Control": "no-store"})
 
     def _navigator(self) -> Response:
@@ -537,7 +562,6 @@ class Application:
                 return self._error(500, "config_save_failed", "Configuration could not be saved.")
             self.state.config = config
             self.state.target = calibrated_target
-            self._clear_conversation_cache_locked()
             self.state.revision += 1
             revision = self.state.revision
         return self._json_response(200, {"revision": revision})
@@ -669,7 +693,6 @@ class Application:
             except (InputUnavailable, TargetUnavailable):
                 return self._error(409, "target_unavailable", "Selected window is unavailable.")
             with self.state.state_lock:
-                self._clear_conversation_cache_locked()
                 self.state.revision += 1
                 revision = self.state.revision
         return self._json_response(200, {"revision": revision})
@@ -681,10 +704,13 @@ class Application:
         headers: Mapping[str, str],
         body: bytes,
     ) -> Response:
-        route_path = urlsplit(path).path
+        parsed_path = urlsplit(path)
+        route_path = parsed_path.path
         if method == "GET":
             if route_path == "/api/status":
                 return self._status()
+            if route_path == "/api/transcript":
+                return self._transcript(parsed_path.query)
             if route_path == "/api/windows":
                 return self._windows()
             if route_path == "/api/navigator":

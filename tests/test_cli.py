@@ -78,6 +78,14 @@ class FakeServer:
 
 
 @dataclass
+class FakeApplication:
+    close_calls: int = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
+@dataclass
 class RuntimeHarness:
     config_path: Path
     registry: FakeRegistry = field(default_factory=FakeRegistry)
@@ -86,6 +94,7 @@ class RuntimeHarness:
     bind_failures: set[str] = field(default_factory=set)
     server_addresses: list[tuple[str, int]] = field(default_factory=list)
     servers: list[FakeServer] = field(default_factory=list)
+    applications: list[FakeApplication] = field(default_factory=list)
     interrupt_server: bool = False
     desktop_error: Exception | None = None
 
@@ -108,6 +117,12 @@ class RuntimeHarness:
     def registry_factory(self, agents):
         assert [agent.id for agent in agents] == ["codex"]
         return self.registry
+
+    def application_factory(self, *args, **kwargs):
+        del args, kwargs
+        application = FakeApplication()
+        self.applications.append(application)
+        return application
 
     def server_factory(self, address, handler):
         del handler
@@ -136,6 +151,7 @@ def test_valid_saved_target_and_calibration_do_not_open_setup(runtime):
 
     assert result == StartResult(0, "http://127.0.0.1:8765/")
     assert runtime.browser_urls == []
+    assert runtime.applications[0].close_calls == 1
 
 
 def test_saved_target_resolution_uses_stable_hints_and_calibration(runtime):
@@ -329,3 +345,4 @@ def test_keyboard_interrupt_shuts_down_and_closes_server(runtime):
     assert runtime.servers[0].serve_calls == 1
     assert runtime.servers[0].shutdown_calls == 1
     assert runtime.servers[0].close_calls == 1
+    assert runtime.applications[0].close_calls == 1
