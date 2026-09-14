@@ -103,6 +103,23 @@ class AccessibilityNode:
     stable_id: str | None = None
 
 
+@dataclass(frozen=True)
+class SemanticNode:
+    id: str
+    role: str
+    name: str
+    class_name: str
+    depth: int
+    offscreen: bool
+    stable_id: str | None = None
+    region: PixelRegion | None = None
+
+
+@dataclass(frozen=True)
+class SemanticDocument:
+    nodes: tuple[SemanticNode, ...]
+
+
 class InputUnavailable(RuntimeError):
     """Global input was aborted because its exact target was not safe."""
 
@@ -123,6 +140,10 @@ class DesktopBackend(Protocol):
     def capture(self, region: PixelRegion) -> Image.Image: ...
 
     def accessibility_tree(self, window: DesktopWindow) -> list[AccessibilityNode]: ...
+
+    def semantic_document(self, window: DesktopWindow) -> SemanticDocument: ...
+
+    def semantic_text(self, window: DesktopWindow, node: SemanticNode) -> str: ...
 
     def accessibility_action(
         self, node: AccessibilityNode, action: AccessibilityAction
@@ -163,6 +184,18 @@ class _NativeControl:
     stable_id: str | None = None
 
 
+@dataclass(frozen=True)
+class _NativeSemanticControl:
+    id: str
+    role: str
+    name: str
+    class_name: str
+    depth: int
+    offscreen: bool
+    stable_id: str | None = None
+    region: PixelRegion | None = None
+
+
 class WindowsDesktop:
     """Windows desktop mechanics behind an injectable native boundary."""
 
@@ -172,6 +205,8 @@ class WindowsDesktop:
         self._native = native or _WindowsNative()
         self._tree_version = 0
         self._node_controls: dict[str, str] = {}
+        self._semantic_version = 0
+        self._semantic_controls: dict[str, tuple[int, str]] = {}
 
     def list_windows(self) -> list[DesktopWindow]:
         _pin_thread_v2_dpi()
@@ -230,6 +265,46 @@ class WindowsDesktop:
             raise AccessibilityUnavailable(
                 "desktop accessibility is unavailable"
             ) from error
+
+    def semantic_document(self, window: DesktopWindow) -> SemanticDocument:
+        try:
+            controls = self._native.semantic_document(window.native_handle)
+            self._semantic_version += 1
+            self._semantic_controls = {}
+            nodes: list[SemanticNode] = []
+            for index, control in enumerate(controls):
+                node_id = f"semantic-{self._semantic_version}-{index}"
+                self._semantic_controls[node_id] = (window.native_handle, control.id)
+                nodes.append(
+                    SemanticNode(
+                        id=node_id,
+                        role=control.role,
+                        name=control.name,
+                        class_name=control.class_name,
+                        depth=control.depth,
+                        offscreen=control.offscreen,
+                        stable_id=control.stable_id,
+                        region=control.region,
+                    )
+                )
+            return SemanticDocument(tuple(nodes))
+        except AccessibilityUnavailable:
+            raise
+        except Exception as error:
+            raise AccessibilityUnavailable(
+                "desktop semantic accessibility is unavailable"
+            ) from error
+
+    def semantic_text(self, window: DesktopWindow, node: SemanticNode) -> str:
+        mapped = self._semantic_controls.get(node.id)
+        if mapped is None or mapped[0] != window.native_handle:
+            raise AccessibilityUnavailable("semantic control is unavailable")
+        try:
+            return self._native.semantic_text(window.native_handle, mapped[1])
+        except AccessibilityUnavailable:
+            raise
+        except Exception as error:
+            raise AccessibilityUnavailable("semantic text is unavailable") from error
 
     def accessibility_action(
         self, node: AccessibilityNode, action: AccessibilityAction
@@ -291,6 +366,7 @@ class _WindowsNative:
 
     def __init__(self) -> None:
         self._controls: dict[str, Any] = {}
+        self._semantic_controls: dict[str, Any] = {}
 
     def list_windows(self) -> list[_NativeWindow]:
         import ctypes
@@ -423,6 +499,59 @@ class _WindowsNative:
 
         walk(auto.ControlFromHandle(native_handle), 0)
         return controls
+
+    def semantic_document(self, native_handle: int) -> list[_NativeSemanticControl]:
+        import uiautomation as auto
+
+        self._semantic_controls = {}
+        controls: list[_NativeSemanticControl] = []
+
+        def walk(control: Any, depth: int) -> None:
+            if depth > 40:
+                return
+            control_id = f"semantic-control-{len(controls)}"
+            self._semantic_controls[control_id] = control
+            controls.append(
+                _NativeSemanticControl(
+                    id=control_id,
+                    role=str(getattr(control, "ControlTypeName", "")),
+                    name=str(getattr(control, "Name", "")),
+                    class_name=str(getattr(control, "ClassName", "")),
+                    depth=depth,
+                    offscreen=self._is_offscreen(control),
+                    stable_id=self._control_runtime_id(control),
+                    region=self._control_region(control),
+                )
+            )
+            for child in self._children(control):
+                walk(child, depth + 1)
+
+        root = auto.ControlFromHandle(native_handle)
+        if root is None:
+            raise AccessibilityUnavailable("semantic document root is unavailable")
+        walk(root, 0)
+        return controls
+
+    def semantic_text(self, native_handle: int, control_id: str) -> str:
+        import uiautomation as auto
+
+        control = self._semantic_controls.get(control_id)
+        if control is None:
+            raise AccessibilityUnavailable("semantic control is unavailable")
+        root = auto.ControlFromHandle(native_handle)
+        if root is None:
+            raise AccessibilityUnavailable("semantic document root is unavailable")
+        pattern = self._pattern(root, auto, "Text")
+        raw_pattern = getattr(pattern, "pattern", None)
+        if raw_pattern is None:
+            raise AccessibilityUnavailable("semantic document has no text pattern")
+        try:
+            raw_range = raw_pattern.RangeFromChild(control.Element)
+            return str(auto.TextRange(textRange=raw_range).GetText(-1))
+        except AccessibilityUnavailable:
+            raise
+        except Exception as error:
+            raise AccessibilityUnavailable("semantic subtree text is unavailable") from error
 
     @staticmethod
     def _control_runtime_id(control: Any) -> str | None:

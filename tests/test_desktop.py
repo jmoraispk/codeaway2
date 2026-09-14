@@ -1,4 +1,5 @@
 import ctypes
+import sys
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -14,9 +15,12 @@ from codeaway.desktop import (
     InputUnavailable,
     PixelPoint,
     PixelRegion,
+    SemanticDocument,
+    SemanticNode,
     WindowsDesktop,
     _WindowsNative,
     _NativeControl,
+    _NativeSemanticControl,
     _NativeWindow,
 )
 
@@ -75,6 +79,8 @@ def mock_native_activation(monkeypatch, foreground_handle, show_window=None):
 class FakeWindowsNative:
     windows: list[_NativeWindow] = field(default_factory=list)
     controls: list[_NativeControl] = field(default_factory=list)
+    semantic_controls: list[_NativeSemanticControl] = field(default_factory=list)
+    semantic_texts: dict[str, str] = field(default_factory=dict)
     accessibility_error: Exception | None = None
     activate_result: bool = True
     foreground_handle: int | None = None
@@ -111,6 +117,16 @@ class FakeWindowsNative:
 
     def accessibility_action(self, control_id, action):
         self.action_calls.append((control_id, action))
+
+    def semantic_document(self, native_handle):
+        assert native_handle == 10
+        if self.accessibility_error is not None:
+            raise self.accessibility_error
+        return self.semantic_controls
+
+    def semantic_text(self, native_handle, control_id):
+        assert native_handle == 10
+        return self.semantic_texts[control_id]
 
     def click(self, native_handle, x, y):
         self.input_calls.append(("click", native_handle, x, y))
@@ -422,6 +438,171 @@ def test_accessibility_tree_raises_typed_unavailable_error(native, desktop_windo
 
     assert type(raised.value).__name__ == "AccessibilityUnavailable"
     assert "accessibility" in str(raised.value).casefold()
+
+
+def test_semantic_document_keeps_hidden_and_offscreen_nodes(native, desktop_window):
+    native.semantic_controls = [
+        _NativeSemanticControl(
+            id="message",
+            role="GroupControl",
+            name="",
+            class_name="group flex min-w-0 flex-col",
+            depth=4,
+            offscreen=True,
+            stable_id="runtime:1:2",
+            region=None,
+        ),
+        _NativeSemanticControl(
+            id="role",
+            role="TextControl",
+            name="ChatGPT said:",
+            class_name="sr-only select-none",
+            depth=6,
+            offscreen=True,
+            stable_id=None,
+            region=None,
+        ),
+    ]
+
+    document = WindowsDesktop(native).semantic_document(desktop_window)
+
+    assert document == SemanticDocument(
+        (
+            SemanticNode(
+                id="semantic-1-0",
+                role="GroupControl",
+                name="",
+                class_name="group flex min-w-0 flex-col",
+                depth=4,
+                offscreen=True,
+                stable_id="runtime:1:2",
+                region=None,
+            ),
+            SemanticNode(
+                id="semantic-1-1",
+                role="TextControl",
+                name="ChatGPT said:",
+                class_name="sr-only select-none",
+                depth=6,
+                offscreen=True,
+                stable_id=None,
+                region=None,
+            ),
+        )
+    )
+
+
+def test_semantic_text_uses_its_separate_native_control_mapping(native, desktop_window):
+    native.semantic_controls = [
+        _NativeSemanticControl(
+            "message",
+            "GroupControl",
+            "",
+            "group flex min-w-0 flex-col",
+            4,
+            False,
+            "runtime:1:2",
+            PixelRegion(20, 30, 400, 200),
+        )
+    ]
+    native.semantic_texts["message"] = "ChatGPT said:\nLive answer"
+    desktop = WindowsDesktop(native)
+    message = desktop.semantic_document(desktop_window).nodes[0]
+
+    desktop.accessibility_tree(desktop_window)
+
+    assert desktop.semantic_text(desktop_window, message) == "ChatGPT said:\nLive answer"
+
+
+def _semantic_control(
+    name,
+    *,
+    role="TextControl",
+    class_name="",
+    offscreen=False,
+    rectangle=None,
+    children=(),
+    runtime_id=None,
+    element=None,
+):
+    if rectangle is None:
+        rectangle = SimpleNamespace(left=0, top=0, right=0, bottom=0)
+    control = SimpleNamespace(
+        Name=name,
+        ControlTypeName=role,
+        ClassName=class_name,
+        IsOffscreen=offscreen,
+        BoundingRectangle=rectangle,
+        Element=element if element is not None else object(),
+        GetChildren=lambda: list(children),
+    )
+    if runtime_id is not None:
+        control.GetRuntimeId = lambda: runtime_id
+    return control
+
+
+def test_native_semantic_document_includes_offscreen_unbounded_controls(monkeypatch):
+    role = _semantic_control(
+        "ChatGPT said:",
+        class_name="sr-only select-none",
+        offscreen=True,
+    )
+    message = _semantic_control(
+        "",
+        role="GroupControl",
+        class_name="group flex min-w-0 flex-col",
+        rectangle=SimpleNamespace(left=10, top=20, right=410, bottom=220),
+        children=(role,),
+        runtime_id=(42, 7),
+    )
+    root = _semantic_control("ChatGPT", role="WindowControl", children=(message,))
+    auto = SimpleNamespace(ControlFromHandle=lambda handle: root if handle == 42 else None)
+    monkeypatch.setitem(sys.modules, "uiautomation", auto)
+
+    controls = _WindowsNative().semantic_document(42)
+
+    assert [(control.name, control.depth, control.offscreen) for control in controls] == [
+        ("ChatGPT", 0, False),
+        ("", 1, False),
+        ("ChatGPT said:", 2, True),
+    ]
+    assert controls[1].region == PixelRegion(10, 20, 400, 200)
+    assert controls[1].stable_id == "runtime:42:7"
+    assert controls[2].region is None
+
+
+def test_native_semantic_text_reads_the_selected_subtree(monkeypatch):
+    message_element = object()
+    message = _semantic_control(
+        "",
+        role="GroupControl",
+        class_name="group flex min-w-0 flex-col",
+        children=(_semantic_control("ChatGPT said:"),),
+        element=message_element,
+    )
+    raw_calls = []
+    raw_pattern = SimpleNamespace(
+        RangeFromChild=lambda element: raw_calls.append(element) or "message-range"
+    )
+    root = _semantic_control("ChatGPT", role="WindowControl", children=(message,))
+    root.GetTextPattern = lambda: SimpleNamespace(pattern=raw_pattern)
+    auto = SimpleNamespace(
+        ControlFromHandle=lambda handle: root if handle == 42 else None,
+        TextRange=lambda textRange: SimpleNamespace(
+            GetText=lambda maximum: (
+                "ChatGPT said:\nLive answer" if textRange == "message-range" and maximum == -1 else ""
+            )
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "uiautomation", auto)
+    native = _WindowsNative()
+    controls = native.semantic_document(42)
+    message_control = next(control for control in controls if control.role == "GroupControl")
+
+    result = native.semantic_text(42, message_control.id)
+
+    assert result == "ChatGPT said:\nLive answer"
+    assert raw_calls == [message_element]
 
 
 def test_accessibility_action_dispatches_requested_pattern(native, desktop_window):
