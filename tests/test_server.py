@@ -603,6 +603,16 @@ def test_phone_resource_contains_the_workspace_in_document_order(app):
     conversation = page.index('id="conversation"')
     composer = page.index('id="composer"')
     assert status < navigator < conversation < composer
+    assert 'id="transcript"' in page
+    assert 'id="transcript-messages"' in page
+    assert 'id="transcript-stale"' in page
+    assert 'id="transcript-new"' in page
+    assert '<details id="screen-controls" class="screen-controls">' in page
+    assert 'id="screen-refresh"' in page
+    image_tag = next(
+        line for line in page.splitlines() if 'id="conversation-image"' in line
+    )
+    assert " src=" not in image_tag
     assert "/app.js" in page
     assert "/style.css" in page
 

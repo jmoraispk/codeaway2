@@ -40,6 +40,11 @@ class FakeElement {
     this.hidden = false;
     this.listeners = new Map();
     this.naturalWidth = 800;
+    this.open = false;
+    this.scrollTop = 0;
+    this.scrollHeight = 600;
+    this.clientHeight = 300;
+    this.srcHistory = [];
     this.style = {};
     this._textContent = "";
     this.value = "";
@@ -105,6 +110,11 @@ class FakeElement {
     this.attributes[name] = String(value);
   }
 
+  removeAttribute(name) {
+    delete this.attributes[name];
+    if (name === "src") this._src = "";
+  }
+
   getBoundingClientRect() {
     return this._box;
   }
@@ -117,6 +127,7 @@ class FakeElement {
 
   set src(value) {
     this._src = value;
+    this.srcHistory.push(value);
     queueMicrotask(() => this.emit("load"));
   }
 
@@ -166,17 +177,20 @@ class FakeDocument extends FakeElement {
 class FakeWindow {
   constructor() {
     this.intervals = new Map();
+    this.intervalDelays = new Map();
     this.nextInterval = 1;
   }
 
-  setInterval(callback) {
+  setInterval(callback, delay) {
     const id = this.nextInterval++;
     this.intervals.set(id, callback);
+    this.intervalDelays.set(id, delay);
     return id;
   }
 
   clearInterval(id) {
     this.intervals.delete(id);
+    this.intervalDelays.delete(id);
   }
 }
 
@@ -219,7 +233,13 @@ function phoneDocument() {
     "conversation-image",
     "conversation-message",
     "navigator-projects",
+    "screen-controls",
+    "screen-refresh",
     "status-message",
+    "transcript",
+    "transcript-messages",
+    "transcript-new",
+    "transcript-stale",
   ], { phone: true });
   documentRef.elements["navigator-projects"].isConnected = true;
   return documentRef;
@@ -384,18 +404,22 @@ test("phone wiring refreshes autonomous revisions and manages visibility polling
     if (path === "/api/navigator") {
       return response({ available: false, error: "Accessibility unavailable", projects: [] });
     }
+    if (path.startsWith("/api/transcript")) return response(null, 204);
     throw new Error(`unexpected request ${path}`);
   };
 
   const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
   await phone.ready;
 
-  assert.equal(documentRef.elements["conversation-image"].src, "/api/screenshot/conversation?revision=0");
+  assert.equal(documentRef.elements["conversation-image"].src, "");
   assert.match(documentRef.elements["status-message"].textContent, /codex.*ready/i);
-  assert.equal(windowRef.intervals.size, 1);
+  assert.deepEqual([...windowRef.intervalDelays.values()].sort(), [1000, 2000]);
 
-  await [...windowRef.intervals.values()][0]();
-  assert.equal(documentRef.elements["conversation-image"].src, "/api/screenshot/conversation?revision=1");
+  const workspaceTimer = [...windowRef.intervals].find(
+    ([id]) => windowRef.intervalDelays.get(id) === 2000,
+  )[1];
+  await workspaceTimer();
+  assert.equal(documentRef.elements["conversation-image"].src, "");
 
   documentRef.visibilityState = "hidden";
   await documentRef.emit("visibilitychange");
@@ -403,7 +427,126 @@ test("phone wiring refreshes autonomous revisions and manages visibility polling
 
   documentRef.visibilityState = "visible";
   await documentRef.emit("visibilitychange");
-  assert.equal(windowRef.intervals.size, 1);
+  assert.equal(windowRef.intervals.size, 2);
+});
+
+test("phone renders selectable transcript text and polls deltas every second", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const transcriptPaths = [];
+  let transcriptCount = 0;
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") {
+      return response({ available: true, projects: [] });
+    }
+    if (path.startsWith("/api/transcript")) {
+      transcriptPaths.push(path);
+      transcriptCount += 1;
+      if (transcriptCount === 1) return response({
+        mode: "snapshot", stream_id: "stream-a", revision: 2, stale: false,
+        messages: [
+          { id: "u1", role: "user", text: "Prompt text", state: "complete" },
+          { id: "a1", role: "assistant", text: "Reply text", state: "streaming" },
+        ],
+      });
+      return response(null, 204);
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+
+  const messages = documentRef.elements["transcript-messages"].children;
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].className, "transcript-message transcript-message--user");
+  assert.equal(messages[0].children[1].textContent, "Prompt text");
+  assert.equal(messages[1].children[1].textContent, "Reply text");
+  assert.equal(documentRef.elements["conversation-image"].srcHistory.length, 0);
+  assert.deepEqual([...windowRef.intervalDelays.values()].sort(), [1000, 2000]);
+
+  const transcriptTimer = [...windowRef.intervals].find(
+    ([id]) => windowRef.intervalDelays.get(id) === 1000,
+  )[1];
+  await transcriptTimer();
+  assert.deepEqual(transcriptPaths, [
+    "/api/transcript",
+    "/api/transcript?stream=stream-a&after=2",
+  ]);
+});
+
+test("transcript preserves manual scroll and offers a New text jump", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const transcript = documentRef.elements.transcript;
+  transcript.scrollHeight = 1000;
+  transcript.clientHeight = 300;
+  let transcriptCount = 0;
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response({ available: true, projects: [] });
+    if (path.startsWith("/api/transcript")) {
+      transcriptCount += 1;
+      if (transcriptCount === 1) return response({
+          mode: "snapshot", stream_id: "s", revision: 1, stale: false,
+          messages: [{ id: "m", role: "assistant", text: "New", state: "unknown" }],
+        });
+      return response({
+        mode: "delta", stream_id: "s", revision: 2, stale: false,
+        events: [{ kind: "text_appended", message_id: "m", text: " text" }],
+      });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  transcript.scrollTop = 100;
+  const transcriptTimer = [...windowRef.intervals].find(
+    ([id]) => windowRef.intervalDelays.get(id) === 1000,
+  )[1];
+  await transcriptTimer();
+
+  assert.equal(transcript.scrollTop, 100);
+  assert.equal(documentRef.elements["transcript-new"].hidden, false);
+  await documentRef.elements["transcript-new"].emit("click");
+  assert.equal(transcript.scrollTop, 1000);
+  assert.equal(documentRef.elements["transcript-new"].hidden, true);
+});
+
+test("Screen controls fetch only on open, refresh, and visible actions", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  let actionRevision = 4;
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 3, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response({ available: true, projects: [] });
+    if (path.startsWith("/api/transcript")) return response(null, 204);
+    if (path === "/api/action") return response({ revision: actionRevision++ });
+    throw new Error(`unexpected request ${path}`);
+  };
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  const controls = documentRef.elements["screen-controls"];
+  const image = documentRef.elements["conversation-image"];
+
+  assert.deepEqual(image.srcHistory, []);
+  controls.open = true;
+  await controls.emit("toggle");
+  assert.deepEqual(image.srcHistory, ["/api/screenshot/conversation?revision=3"]);
+  await documentRef.elements["screen-refresh"].emit("click");
+  assert.equal(image.srcHistory.length, 2);
+
+  controls.open = false;
+  await controls.emit("toggle");
+  assert.equal(image.src, "");
 });
 
 test("phone navigator renders accessible state and worktree icons without status words", async () => {
@@ -965,6 +1108,8 @@ test("phone pointer and composer listeners dispatch validated actions", async ()
 
   const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
   await phone.ready;
+  documentRef.elements["screen-controls"].open = true;
+  await documentRef.elements["screen-controls"].emit("toggle");
   const image = documentRef.elements["conversation-image"];
 
   await image.emit("pointerdown", { pointerId: 4, clientX: 400, clientY: 300 });

@@ -24,7 +24,18 @@
       <section id="conversation" class="conversation" aria-labelledby="conversation-title">
         <h2 id="conversation-title">Conversation</h2>
         <p id="conversation-message" class="message" role="status"></p>
-        <img id="conversation-image" alt="Current agent conversation">
+        <p id="transcript-stale" class="transcript-stale" role="status" hidden></p>
+        <div id="transcript" class="transcript" tabindex="0" aria-label="Agent transcript">
+          <div id="transcript-messages" class="transcript-messages"></div>
+        </div>
+        <button id="transcript-new" class="transcript-new" type="button" hidden>New text ↓</button>
+        <details id="screen-controls" class="screen-controls">
+          <summary>Screen controls</summary>
+          <div class="screen-toolbar">
+            <button id="screen-refresh" type="button">Refresh screen</button>
+          </div>
+          <img id="conversation-image" alt="Current agent conversation">
+        </details>
       </section>
 
       <form id="composer" class="composer" aria-labelledby="composer-title">

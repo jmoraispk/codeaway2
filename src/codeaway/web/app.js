@@ -299,7 +299,13 @@ function initializePhoneWorkspace({
     conversationImage: documentRef.querySelector("#conversation-image"),
     conversationMessage: documentRef.querySelector("#conversation-message"),
     navigatorProjects: documentRef.querySelector("#navigator-projects"),
+    screenControls: documentRef.querySelector("#screen-controls"),
+    screenRefresh: documentRef.querySelector("#screen-refresh"),
     statusMessage: documentRef.querySelector("#status-message"),
+    transcript: documentRef.querySelector("#transcript"),
+    transcriptMessages: documentRef.querySelector("#transcript-messages"),
+    transcriptNew: documentRef.querySelector("#transcript-new"),
+    transcriptStale: documentRef.querySelector("#transcript-stale"),
   };
   const state = {
     actionBusy: false,
@@ -314,6 +320,8 @@ function initializePhoneWorkspace({
     aliasDrafts: {},
     restoreFocus: null,
     revision: null,
+    transcriptPollTimer: null,
+    transcriptRefreshing: null,
   };
 
   function showMessage(element, message, error = false) {
@@ -323,6 +331,20 @@ function initializePhoneWorkspace({
 
   async function request(path, options = {}) {
     const response = await fetchFn(path, options);
+    if (!response.ok) {
+      let message = `Request failed (${response.status}).`;
+      try { message = (await response.json()).error.message; } catch (_) { /* use status */ }
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async function requestTranscript(cursor) {
+    const query = cursor.stream === undefined
+      ? ""
+      : `?stream=${encodeURIComponent(cursor.stream)}&after=${encodeURIComponent(cursor.after)}`;
+    const response = await fetchFn(`/api/transcript${query}`);
+    if (response.status === 204) return { mode: "unchanged" };
     if (!response.ok) {
       let message = `Request failed (${response.status}).`;
       try { message = (await response.json()).error.message; } catch (_) { /* use status */ }
@@ -636,6 +658,38 @@ function initializePhoneWorkspace({
     }
   }
 
+  function isNearBottom(element) {
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= 64;
+  }
+
+  function renderTranscript(transcriptState) {
+    const followLatest = elements.transcriptMessages.children.length === 0
+      || isNearBottom(elements.transcript);
+    const rendered = transcriptState.messages.map((message) => {
+      const article = documentRef.createElement("article");
+      article.className = `transcript-message transcript-message--${message.role}`;
+      const label = documentRef.createElement("p");
+      label.className = "transcript-role";
+      label.textContent = message.role === "user" ? "You" : "Agent";
+      const text = documentRef.createElement("pre");
+      text.className = "transcript-text";
+      text.textContent = message.text;
+      article.append(label, text);
+      return article;
+    });
+    elements.transcriptMessages.replaceChildren(...rendered);
+    elements.transcriptStale.hidden = !transcriptState.stale;
+    elements.transcriptStale.textContent = transcriptState.stale
+      ? transcriptState.error || "Transcript updating is delayed."
+      : "";
+    if (followLatest) {
+      elements.transcript.scrollTop = elements.transcript.scrollHeight;
+      elements.transcriptNew.hidden = true;
+    } else {
+      elements.transcriptNew.hidden = false;
+    }
+  }
+
   function requestConversationImage(revision) {
     return new Promise((resolve, reject) => {
       const image = elements.conversationImage;
@@ -661,6 +715,11 @@ function initializePhoneWorkspace({
     postAction: (value) => request("/api/action", actionRequest(value)),
     requestImage: requestConversationImage,
     onComposerClear: () => { elements.composerInput.value = ""; },
+    shouldRefreshScreen: () => elements.screenControls.open,
+  });
+  const transcript = createTranscriptController({
+    requestTranscript,
+    onChange: renderTranscript,
   });
 
   function showConversationRefreshStatus() {
@@ -696,8 +755,6 @@ function initializePhoneWorkspace({
         if (state.revision === null || status.revision >= state.revision) {
           state.revision = status.revision;
           renderStatus(status);
-          await phone.refreshConversation(status.revision);
-          showConversationRefreshStatus();
         }
       } else {
         showMessage(elements.statusMessage, statusResult.reason.message, true);
@@ -722,18 +779,66 @@ function initializePhoneWorkspace({
     }
   }
 
+  async function refreshTranscript() {
+    if (state.transcriptRefreshing) return state.transcriptRefreshing;
+    state.transcriptRefreshing = (async () => {
+      try {
+        await transcript.poll();
+      } catch (error) {
+        elements.transcriptStale.hidden = false;
+        elements.transcriptStale.textContent = error.message;
+      }
+    })();
+    try {
+      await state.transcriptRefreshing;
+    } finally {
+      state.transcriptRefreshing = null;
+    }
+  }
+
   function startPolling() {
-    if (state.pollTimer !== null) return state.refreshing || Promise.resolve();
-    const refresh = refreshWorkspace();
-    state.pollTimer = windowRef.setInterval(refreshWorkspace, 2000);
-    return refresh;
+    const started = [];
+    if (state.pollTimer === null) {
+      started.push(refreshWorkspace());
+      state.pollTimer = windowRef.setInterval(refreshWorkspace, 2000);
+    }
+    if (state.transcriptPollTimer === null) {
+      started.push(refreshTranscript());
+      state.transcriptPollTimer = windowRef.setInterval(refreshTranscript, 1000);
+    }
+    return Promise.all(started);
   }
 
   function stopPolling() {
-    if (state.pollTimer === null) return;
-    windowRef.clearInterval(state.pollTimer);
-    state.pollTimer = null;
+    if (state.pollTimer !== null) {
+      windowRef.clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+    if (state.transcriptPollTimer !== null) {
+      windowRef.clearInterval(state.transcriptPollTimer);
+      state.transcriptPollTimer = null;
+    }
   }
+
+  elements.transcriptNew.addEventListener("click", () => {
+    elements.transcript.scrollTop = elements.transcript.scrollHeight;
+    elements.transcriptNew.hidden = true;
+  });
+  elements.screenControls.addEventListener("toggle", async () => {
+    if (!elements.screenControls.open) {
+      phone.closeScreen();
+      elements.conversationImage.removeAttribute("src");
+      showConversationRefreshStatus();
+      return;
+    }
+    await phone.refreshConversation(state.revision ?? 0, true);
+    showConversationRefreshStatus();
+  });
+  elements.screenRefresh.addEventListener("click", async () => {
+    if (!elements.screenControls.open) return;
+    await phone.refreshConversation(state.revision ?? 0, true);
+    showConversationRefreshStatus();
+  });
 
   elements.conversationImage.addEventListener("pointerdown", (event) => {
     if (state.actionBusy || !phone.canHandleGesture(elements.conversationImage)) return;
@@ -796,7 +901,13 @@ function initializePhoneWorkspace({
   const ready = documentRef.visibilityState === "visible"
     ? startPolling()
     : Promise.resolve();
-  return { ready, refreshWorkspace, startPolling, stopPolling };
+  return {
+    ready,
+    refreshTranscript,
+    refreshWorkspace,
+    startPolling,
+    stopPolling,
+  };
 }
 
 function initializeSetup({ documentRef = document, fetchFn = fetch } = {}) {

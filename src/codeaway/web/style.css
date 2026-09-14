@@ -289,6 +289,79 @@ input { accent-color: var(--color-primary); }
   .status-icon--busy { animation: none; }
 }
 
+.transcript-stale {
+  margin: 0 0 .65rem;
+  color: var(--color-error);
+  font-size: .85rem;
+}
+.transcript {
+  max-height: min(62vh, 38rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: .7rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: .45rem;
+  background: var(--color-surface-muted);
+  scrollbar-gutter: stable;
+}
+.transcript-messages { display: grid; gap: .7rem; }
+.transcript-message {
+  width: min(92%, 38rem);
+  padding: .7rem .8rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: .65rem;
+  background: var(--color-surface);
+}
+.transcript-message--user {
+  justify-self: end;
+  background: var(--color-surface-selected);
+  color: var(--color-selected-text);
+}
+.transcript-message--assistant { justify-self: start; }
+.transcript-role {
+  margin: 0 0 .3rem;
+  color: var(--color-text-muted);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.transcript-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: inherit;
+  font: inherit;
+  line-height: 1.55;
+}
+.transcript-new {
+  position: sticky;
+  bottom: .65rem;
+  display: block;
+  min-height: 2rem;
+  margin: -2.5rem auto .5rem;
+  padding: .25rem .65rem;
+  border-radius: 999px;
+  box-shadow: 0 .2rem .7rem rgb(0 0 0 / 18%);
+  font-size: .8rem;
+}
+.transcript-new[hidden] { display: none; }
+.screen-controls {
+  margin-top: .85rem;
+  border-top: 1px solid var(--color-border-soft);
+  padding-top: .75rem;
+}
+.screen-controls summary {
+  cursor: pointer;
+  color: var(--color-text-subtle);
+  font-weight: 700;
+}
+.screen-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: .7rem 0;
+}
+
 #conversation-image {
   display: block;
   width: 100%;
@@ -313,6 +386,8 @@ textarea { resize: vertical; }
   .inline-editor textarea, .inline-editor input { grid-column: 1 / -1; }
   .composer-controls { grid-template-columns: 1fr; }
   .composer-send { width: 100%; }
+  .transcript { max-height: 58vh; padding: .55rem; }
+  .transcript-message { width: 96%; padding: .6rem .65rem; }
 }
 
 @media (max-width: 30rem) {
