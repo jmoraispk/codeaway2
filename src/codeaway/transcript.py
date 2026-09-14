@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Callable, Literal
 from uuid import uuid4
 
 
@@ -16,6 +17,9 @@ EventKind = Literal[
     "message_completed",
 ]
 ResultMode = Literal["pending", "snapshot", "delta", "unchanged"]
+SAMPLE_INTERVAL_SECONDS = 1.0
+ACTIVITY_LEASE_SECONDS = 4.0
+MAX_DELTA_REVISIONS = 128
 
 
 @dataclass(frozen=True)
@@ -252,3 +256,91 @@ class TranscriptStore:
                 stale=self._stale,
                 error=self._error,
             )
+
+
+class TranscriptService:
+    def __init__(
+        self,
+        sample: Callable[[], TranscriptObservation | None],
+        *,
+        store: TranscriptStore | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        wake_event: Any | None = None,
+        stop_event: Any | None = None,
+        thread_factory: Callable[..., Any] = threading.Thread,
+    ) -> None:
+        self._sample = sample
+        self._store = store or TranscriptStore(MAX_DELTA_REVISIONS)
+        self._clock = clock
+        self._wake_event = wake_event or threading.Event()
+        self._stop_event = stop_event or threading.Event()
+        self._state_lock = threading.Lock()
+        self._sampling_lock = threading.Lock()
+        self._lease_deadline = 0.0
+        self._closed = False
+        self._thread = thread_factory(
+            target=self._run,
+            name="codeaway-transcript",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def poll(self, stream_id: str | None, after: int | None) -> TranscriptResult:
+        with self._state_lock:
+            if not self._closed:
+                self._lease_deadline = self._clock() + ACTIVITY_LEASE_SECONDS
+                self._wake_event.set()
+        return self._store.poll(stream_id, after)
+
+    def _lease_active(self) -> bool:
+        with self._state_lock:
+            return not self._closed and self._clock() < self._lease_deadline
+
+    def sample_once(self) -> bool:
+        if not self._sampling_lock.acquire(blocking=False):
+            return False
+        try:
+            try:
+                observation = self._sample()
+                if observation is not None:
+                    self._store.observe(observation)
+            except Exception:
+                self._store.mark_stale("Transcript updating is delayed.")
+            return True
+        finally:
+            self._sampling_lock.release()
+
+    def _run(self) -> None:
+        next_sample_at = 0.0
+        was_active = False
+        while not self._stop_event.is_set():
+            now = self._clock()
+            with self._state_lock:
+                lease_deadline = self._lease_deadline
+            active = now < lease_deadline
+            if not active:
+                was_active = False
+                self._wake_event.wait()
+                self._wake_event.clear()
+                continue
+            if not was_active:
+                next_sample_at = now
+                was_active = True
+            if now >= next_sample_at:
+                self.sample_once()
+                next_sample_at = self._clock() + SAMPLE_INTERVAL_SECONDS
+                now = self._clock()
+            wait_seconds = min(next_sample_at - now, lease_deadline - now)
+            if wait_seconds <= 0:
+                continue
+            self._wake_event.wait(wait_seconds)
+            self._wake_event.clear()
+
+    def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._stop_event.set()
+            self._wake_event.set()
+        self._thread.join(timeout=2.0)
