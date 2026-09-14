@@ -752,15 +752,18 @@ def make_handler(application: Application, logger: Any | None = None):
                     response = Application._error(
                         500, "internal_error", "Internal server error."
                     )
-            self.send_response(response.status)
-            self.send_header("Content-Type", response.content_type)
-            self.send_header("Content-Length", str(len(response.body)))
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
-            for name, value in response.headers.items():
-                self.send_header(name, value)
-            self.end_headers()
-            self.wfile.write(response.body)
+            try:
+                self.send_response(response.status)
+                self.send_header("Content-Type", response.content_type)
+                self.send_header("Content-Length", str(len(response.body)))
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+                for name, value in response.headers.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(response.body)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                self.close_connection = True
 
         def do_GET(self) -> None:
             self._dispatch()

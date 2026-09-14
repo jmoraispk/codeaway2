@@ -1074,6 +1074,30 @@ def test_dispatch_converts_unexpected_exception_to_structured_server_error(app):
     assert payload(response)["error"]["code"] == "internal_error"
 
 
+@pytest.mark.parametrize(
+    "disconnect",
+    [BrokenPipeError(), ConnectionAbortedError(), ConnectionResetError()],
+)
+def test_http_handler_ignores_client_disconnect_while_writing_response(app, disconnect):
+    class DisconnectedWriter:
+        def write(self, body):
+            del body
+            raise disconnect
+
+    handler_type = make_handler(app)
+    handler = object.__new__(handler_type)
+    handler.command = "GET"
+    handler.path = "/api/status"
+    handler.headers = {}
+    handler.rfile = BytesIO()
+    handler.wfile = DisconnectedWriter()
+    handler.send_response = lambda status: None
+    handler.send_header = lambda name, value: None
+    handler.end_headers = lambda: None
+
+    handler._dispatch()
+
+
 def test_http_handler_adapts_live_get_and_post_requests(app):
     with running_server(app) as url:
         with urlopen(f"{url}/api/status") as response:
