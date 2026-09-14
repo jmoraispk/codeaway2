@@ -199,7 +199,35 @@ input { accent-color: var(--color-primary); }
   background: var(--color-surface);
 }
 .navigator h1, .conversation h2 { margin-bottom: .8rem; font-size: 1.1rem; }
+.navigator-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-bottom: .8rem;
+}
+.navigator-header h1 { margin: 0; }
+.navigator-toggle {
+  display: grid;
+  width: 2.35rem;
+  padding: 0;
+  place-items: center;
+}
+.navigator-toggle-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  transition: transform .12s ease;
+}
+.navigator-toggle-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.navigator-toggle.collapsed .navigator-toggle-icon { transform: rotate(180deg); }
 .navigator-projects { display: grid; gap: .45rem; }
+.navigator-projects[hidden] { display: none; }
 .project { border: 1px solid var(--color-border-soft); border-radius: .4rem; overflow: hidden; }
 .project-header {
   display: grid;

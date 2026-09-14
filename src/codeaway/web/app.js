@@ -299,6 +299,7 @@ function initializePhoneWorkspace({
     conversationImage: documentRef.querySelector("#conversation-image"),
     conversationMessage: documentRef.querySelector("#conversation-message"),
     navigatorProjects: documentRef.querySelector("#navigator-projects"),
+    navigatorToggle: documentRef.querySelector("#navigator-toggle"),
     screenControls: documentRef.querySelector("#screen-controls"),
     screenRefresh: documentRef.querySelector("#screen-refresh"),
     statusMessage: documentRef.querySelector("#status-message"),
@@ -314,6 +315,7 @@ function initializePhoneWorkspace({
     expanded: {},
     gesture: null,
     navigator: null,
+    navigatorCollapsed: false,
     pollTimer: null,
     refreshing: null,
     aliasingTask: null,
@@ -658,6 +660,16 @@ function initializePhoneWorkspace({
     }
   }
 
+  function setNavigatorCollapsed(collapsed) {
+    state.navigatorCollapsed = collapsed;
+    elements.navigatorProjects.hidden = collapsed;
+    elements.navigatorToggle.setAttribute("aria-expanded", String(!collapsed));
+    const label = collapsed ? "Expand navigator" : "Collapse navigator";
+    elements.navigatorToggle.setAttribute("aria-label", label);
+    elements.navigatorToggle.setAttribute("title", label);
+    elements.navigatorToggle.classList.toggle("collapsed", collapsed);
+  }
+
   function isNearBottom(element) {
     return element.scrollHeight - element.scrollTop - element.clientHeight <= 64;
   }
@@ -823,6 +835,10 @@ function initializePhoneWorkspace({
   elements.transcriptNew.addEventListener("click", () => {
     elements.transcript.scrollTop = elements.transcript.scrollHeight;
     elements.transcriptNew.hidden = true;
+  });
+  setNavigatorCollapsed(false);
+  elements.navigatorToggle.addEventListener("click", () => {
+    setNavigatorCollapsed(!state.navigatorCollapsed);
   });
   elements.screenControls.addEventListener("toggle", async () => {
     if (!elements.screenControls.open) {

@@ -17,7 +17,22 @@
       </header>
 
       <section id="navigator" class="navigator" aria-labelledby="navigator-title">
-        <h1 id="navigator-title">Navigator</h1>
+        <div class="navigator-header">
+          <h1 id="navigator-title">Navigator</h1>
+          <button
+            id="navigator-toggle"
+            class="navigator-toggle secondary"
+            type="button"
+            aria-controls="navigator-projects"
+            aria-expanded="true"
+            aria-label="Collapse navigator"
+            title="Collapse navigator"
+          >
+            <svg class="navigator-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 15 6-6 6 6"></path>
+            </svg>
+          </button>
+        </div>
         <div id="navigator-projects" class="navigator-projects" aria-live="polite"></div>
       </section>
 

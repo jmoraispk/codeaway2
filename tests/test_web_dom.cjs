@@ -233,6 +233,7 @@ function phoneDocument() {
     "conversation-image",
     "conversation-message",
     "navigator-projects",
+    "navigator-toggle",
     "screen-controls",
     "screen-refresh",
     "status-message",
@@ -428,6 +429,49 @@ test("phone wiring refreshes autonomous revisions and manages visibility polling
   documentRef.visibilityState = "visible";
   await documentRef.emit("visibilitychange");
   assert.equal(windowRef.intervals.size, 2);
+});
+
+test("navigator header control collapses without discarding project state", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response({
+      available: true,
+      projects: [{
+        name: "Alpha", connected: true, expanded: true, host: "local",
+        state: "connected", tasks: [],
+      }],
+    });
+    if (path.startsWith("/api/transcript")) return response(null, 204);
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+
+  const toggle = documentRef.elements["navigator-toggle"];
+  const projects = documentRef.elements["navigator-projects"];
+  const renderedProject = projects.children[0];
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+  assert.equal(toggle.attributes["aria-label"], "Collapse navigator");
+  assert.equal(projects.hidden, false);
+
+  await toggle.emit("click");
+
+  assert.equal(toggle.attributes["aria-expanded"], "false");
+  assert.equal(toggle.attributes["aria-label"], "Expand navigator");
+  assert.equal(projects.hidden, true);
+  assert.strictEqual(projects.children[0], renderedProject);
+
+  await toggle.emit("click");
+
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+  assert.equal(toggle.attributes["aria-label"], "Collapse navigator");
+  assert.equal(projects.hidden, false);
+  assert.strictEqual(projects.children[0], renderedProject);
 });
 
 test("phone renders selectable transcript text and polls deltas every second", async () => {

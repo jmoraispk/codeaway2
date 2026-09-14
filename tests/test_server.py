@@ -603,6 +603,7 @@ def test_phone_resource_contains_the_workspace_in_document_order(app):
     conversation = page.index('id="conversation"')
     composer = page.index('id="composer"')
     assert status < navigator < conversation < composer
+    assert 'id="navigator-toggle"' in page
     assert 'id="transcript"' in page
     assert 'id="transcript-messages"' in page
     assert 'id="transcript-stale"' in page

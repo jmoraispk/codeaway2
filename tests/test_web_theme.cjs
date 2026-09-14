@@ -193,6 +193,49 @@ test("setup workspace follows the operating system dark color preference", async
   });
 });
 
+test("navigator control collapses and restores the real rendered panel", async () => {
+  const web = await serveWeb();
+  let result;
+  try {
+    result = await evaluateInDarkEdge(web.url, `(() => {
+      const toggle = document.querySelector("#navigator-toggle");
+      const projects = document.querySelector("#navigator-projects");
+      if (!toggle || !projects || !projects.firstElementChild) return false;
+      const project = projects.firstElementChild;
+      toggle.click();
+      const collapsed = {
+        expanded: toggle.getAttribute("aria-expanded"),
+        label: toggle.getAttribute("aria-label"),
+        hidden: projects.hidden,
+        display: getComputedStyle(projects).display,
+      };
+      toggle.click();
+      return JSON.stringify({
+        collapsed,
+        expanded: toggle.getAttribute("aria-expanded"),
+        label: toggle.getAttribute("aria-label"),
+        hidden: projects.hidden,
+        sameProject: projects.firstElementChild === project,
+      });
+    })()`);
+  } finally {
+    await web.close();
+  }
+
+  assert.deepEqual(JSON.parse(result), {
+    collapsed: {
+      expanded: "false",
+      label: "Expand navigator",
+      hidden: true,
+      display: "none",
+    },
+    expanded: "true",
+    label: "Collapse navigator",
+    hidden: false,
+    sameProject: true,
+  });
+});
+
 test("project and task status icons share a horizontal centerline", async () => {
   const web = await serveWeb();
   let centers;
