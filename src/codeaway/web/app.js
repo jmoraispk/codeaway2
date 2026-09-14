@@ -87,7 +87,133 @@ function createSetupModel(surfaces, status) {
   return model;
 }
 
-function createPhoneController({ postAction, requestImage, onComposerClear = () => {} }) {
+function createTranscriptController({ requestTranscript, onChange = () => {} }) {
+  const state = {
+    messages: [],
+    stale: false,
+    error: null,
+    streamId: null,
+    revision: 0,
+    requestToken: 0,
+  };
+
+  function messagesCopy(messages = state.messages) {
+    return messages.map((message) => ({ ...message }));
+  }
+
+  function publishedState() {
+    return {
+      messages: messagesCopy(),
+      stale: state.stale,
+      error: state.error,
+      streamId: state.streamId,
+      revision: state.revision,
+    };
+  }
+
+  function applyEvents(messages, events) {
+    for (const event of events) {
+      const index = messages.findIndex((message) => message.id === event.message_id);
+      if (event.kind === "message_added") {
+        if (!event.message || index !== -1) throw new Error("Invalid transcript event.");
+        messages.push({ ...event.message });
+      } else if (event.kind === "text_appended") {
+        if (index === -1 || typeof event.text !== "string") {
+          throw new Error("Invalid transcript event.");
+        }
+        messages[index] = { ...messages[index], text: messages[index].text + event.text };
+      } else if (event.kind === "message_replaced") {
+        if (index === -1 || typeof event.text !== "string") {
+          throw new Error("Invalid transcript event.");
+        }
+        messages[index] = {
+          ...messages[index],
+          ...(event.message || {}),
+          id: event.message_id,
+          text: event.text,
+          ...(event.state ? { state: event.state } : {}),
+        };
+      } else if (event.kind === "message_completed") {
+        if (index === -1) throw new Error("Invalid transcript event.");
+        messages[index] = {
+          ...messages[index],
+          state: event.state || "complete",
+        };
+      } else {
+        throw new Error("Unknown transcript event.");
+      }
+    }
+  }
+
+  const controller = {
+    get messages() { return messagesCopy(); },
+    get stale() { return state.stale; },
+    get error() { return state.error; },
+    get streamId() { return state.streamId; },
+    get revision() { return state.revision; },
+    async poll() {
+      const cursor = state.streamId === null
+        ? {}
+        : { stream: state.streamId, after: state.revision };
+      const requestToken = ++state.requestToken;
+      const result = await requestTranscript(cursor);
+      if (requestToken !== state.requestToken) return false;
+      if (!result || result.mode === "unchanged") return false;
+
+      let nextMessages = messagesCopy();
+      let nextStreamId = state.streamId;
+      let nextRevision = state.revision;
+      if (result.mode === "snapshot") {
+        if (
+          typeof result.stream_id !== "string"
+          || !Number.isInteger(result.revision)
+          || !Array.isArray(result.messages)
+        ) throw new Error("Invalid transcript snapshot.");
+        if (result.stream_id === state.streamId && result.revision < state.revision) {
+          return false;
+        }
+        nextMessages = messagesCopy(result.messages);
+        nextStreamId = result.stream_id;
+        nextRevision = result.revision;
+      } else if (result.mode === "delta") {
+        if (
+          result.stream_id !== state.streamId
+          || !Number.isInteger(result.revision)
+          || result.revision < state.revision
+          || !Array.isArray(result.events)
+        ) throw new Error("Invalid transcript delta.");
+        applyEvents(nextMessages, result.events);
+        nextRevision = result.revision;
+      } else if (result.mode !== "pending") {
+        throw new Error("Invalid transcript response.");
+      }
+
+      const nextStale = Boolean(result.stale);
+      const nextError = result.error || null;
+      const changed = nextStreamId !== state.streamId
+        || nextRevision !== state.revision
+        || nextStale !== state.stale
+        || nextError !== state.error
+        || JSON.stringify(nextMessages) !== JSON.stringify(state.messages);
+      if (!changed) return false;
+      state.messages = nextMessages;
+      state.streamId = nextStreamId;
+      state.revision = nextRevision;
+      state.stale = nextStale;
+      state.error = nextError;
+      onChange(publishedState());
+      return true;
+    },
+  };
+  return controller;
+}
+
+function createPhoneController({
+  postAction,
+  requestImage,
+  onComposerClear = () => {},
+  shouldRefreshScreen = () => true,
+}) {
   const state = {
     composerText: "",
     conversationError: "",
@@ -110,6 +236,12 @@ function createPhoneController({ postAction, requestImage, onComposerClear = () 
     },
     canHandleGesture(image) {
       return state.imageRevision !== null && image.naturalWidth > 0;
+    },
+    closeScreen() {
+      state.imageRequestToken += 1;
+      state.imageRevision = null;
+      state.requestedImageRevision = null;
+      state.conversationError = "";
     },
     async refreshConversation(revision, successfulAction = false) {
       if (
@@ -136,14 +268,18 @@ function createPhoneController({ postAction, requestImage, onComposerClear = () 
     },
     async performAction(value) {
       const result = await postAction(value);
-      await controller.refreshConversation(result.revision, true);
+      if (shouldRefreshScreen()) {
+        await controller.refreshConversation(result.revision, true);
+      }
       return result;
     },
     async send() {
       const result = await postAction({ kind: "send", text: state.composerText });
       state.composerText = "";
       onComposerClear();
-      await controller.refreshConversation(result.revision, true);
+      if (shouldRefreshScreen()) {
+        await controller.refreshConversation(result.revision, true);
+      }
       return result;
     },
   };
@@ -908,6 +1044,7 @@ if (typeof module !== "undefined" && module.exports) {
     calibrationRequest,
     createPhoneController,
     createSetupModel,
+    createTranscriptController,
     initializePhoneWorkspace,
     initializeSetup,
     normalizeRectangle,
