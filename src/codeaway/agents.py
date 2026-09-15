@@ -1,7 +1,7 @@
 import math
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Literal, Protocol
 
@@ -779,17 +779,43 @@ class CodexAgent:
 
     def _descendant_message_text(
         self, nodes: tuple[SemanticNode, ...], owner: SemanticNode
-    ) -> str:
+    ) -> tuple[str, bool]:
         owner_index = nodes.index(owner)
         end = self._semantic_subtree_end(nodes, owner_index)
-        pieces = [
-            node.name
-            for node in nodes[owner_index + 1 : end]
-            if node.role.casefold() in {"text", "textcontrol"}
-            and node.name not in {"You said:", "ChatGPT said:"}
-            and node.name
-        ]
-        return self._join_message_pieces(pieces)
+        content_roles = {
+            "document",
+            "documentcontrol",
+            "group",
+            "groupcontrol",
+            "heading",
+            "headingcontrol",
+            "list",
+            "listcontrol",
+            "table",
+            "tablecontrol",
+        }
+        pieces: list[str] = []
+        filtered_tool_result = False
+        index = owner_index + 1
+        while index < end:
+            node = nodes[index]
+            block_end = min(self._semantic_subtree_end(nodes, index), end)
+            if (
+                node.depth == owner.depth + 1
+                and node.role.casefold() in content_roles
+                and self._is_tool_result_block(nodes, index, block_end)
+            ):
+                filtered_tool_result = True
+                index = max(index + 1, block_end)
+                continue
+            if (
+                node.role.casefold() in {"text", "textcontrol"}
+                and node.name not in {"You said:", "ChatGPT said:"}
+                and node.name
+            ):
+                pieces.append(node.name)
+            index += 1
+        return self._join_message_pieces(pieces), filtered_tool_result
 
     @staticmethod
     def _join_message_pieces(pieces: list[str]) -> str:
@@ -803,6 +829,62 @@ class CodexAgent:
                 text += "\n" + piece
         return text
 
+    @staticmethod
+    def _clean_transient_response(text: str) -> tuple[str, bool]:
+        lines = text.splitlines()
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        if not lines:
+            return "", False
+
+        first = lines[0].strip()
+        transient = False
+        if first.casefold() == "response started":
+            lines.pop(0)
+            transient = True
+        else:
+            for prefix in ("Response:", "Response complete:"):
+                if first.casefold().startswith(prefix.casefold()):
+                    lines[0] = first[len(prefix) :].lstrip()
+                    transient = True
+                    break
+
+        cleaned = "\n".join(lines).strip()
+        if not transient:
+            return cleaned, False
+
+        words = cleaned.split()
+        midpoint = len(words) // 2
+        if len(lines) >= 2 and len(words) % 2 == 0:
+            if words[:midpoint] == words[midpoint:]:
+                cleaned = " ".join(words[:midpoint])
+        return cleaned, True
+
+    @staticmethod
+    def _same_response(left: str, right: str) -> bool:
+        left_flat = " ".join(left.split())
+        right_flat = " ".join(right.split())
+        if left_flat == right_flat:
+            return True
+        shorter, longer = sorted((left_flat, right_flat), key=len)
+        return (
+            len(shorter) >= 24
+            and len(shorter) / len(longer) >= 0.8
+            and longer.startswith(shorter)
+        )
+
+    @staticmethod
+    def _is_tool_result_block(
+        nodes: tuple[SemanticNode, ...], start: int, end: int
+    ) -> bool:
+        for node in nodes[start:end]:
+            if node.role.casefold() not in {"button", "buttoncontrol"}:
+                continue
+            name = node.name.strip().casefold()
+            if name == "undo" or name == "review" or name.startswith("review "):
+                return True
+        return False
+
     def _sibling_message_text(
         self,
         nodes: tuple[SemanticNode, ...],
@@ -810,7 +892,6 @@ class CodexAgent:
         message_end: int,
     ) -> str:
         marker_depth = nodes[marker_index].depth
-        active_block = False
         pieces: list[str] = []
         content_roles = {
             "document",
@@ -824,18 +905,28 @@ class CodexAgent:
             "table",
             "tablecontrol",
         }
-        for node in nodes[marker_index + 1 : message_end]:
+        index = marker_index + 1
+        while index < message_end:
+            node = nodes[index]
             if node.depth < marker_depth:
                 break
-            if node.depth == marker_depth:
-                active_block = node.role.casefold() in content_roles
+            if node.depth != marker_depth:
+                index += 1
+                continue
+
+            block_end = min(self._semantic_subtree_end(nodes, index), message_end)
             if (
-                active_block
-                and node.role.casefold() in {"text", "textcontrol"}
-                and node.name not in {"You said:", "ChatGPT said:"}
-                and node.name
+                node.role.casefold() in content_roles
+                and not self._is_tool_result_block(nodes, index, block_end)
             ):
-                pieces.append(node.name)
+                pieces.extend(
+                    candidate.name
+                    for candidate in nodes[index:block_end]
+                    if candidate.role.casefold() in {"text", "textcontrol"}
+                    and candidate.name not in {"You said:", "ChatGPT said:"}
+                    and candidate.name
+                )
+            index = max(index + 1, block_end)
         return self._join_message_pieces(pieces)
 
     def read_transcript(
@@ -868,7 +959,7 @@ class CodexAgent:
                 task_identity = "\0".join((row.name, row.host or "", task_id))
             busy = self._has_class_on_row(task, action_nodes, self._BUSY_CLASS_TOKENS)
         container_end = self._semantic_subtree_end(nodes, container_index)
-        messages: list[ObservedMessage] = []
+        message_records: list[tuple[ObservedMessage, bool]] = []
         used_owners: set[str] = set()
         marker_indexes = [
             index
@@ -896,10 +987,16 @@ class CodexAgent:
                 else container_end
             )
             if owner is not None:
-                try:
-                    raw_text = desktop.semantic_text(target.window, owner)
-                except AccessibilityUnavailable:
-                    raw_text = self._descendant_message_text(nodes, owner)
+                descendant_text, filtered_tool_result = (
+                    self._descendant_message_text(nodes, owner)
+                )
+                if filtered_tool_result:
+                    raw_text = descendant_text
+                else:
+                    try:
+                        raw_text = desktop.semantic_text(target.window, owner)
+                    except AccessibilityUnavailable:
+                        raw_text = descendant_text
             elif role == "assistant":
                 raw_text = self._sibling_message_text(
                     nodes, marker_index, message_end
@@ -909,12 +1006,37 @@ class CodexAgent:
             text = self._normalize_message_text(
                 raw_text, marker.name
             )
+            transient = False
+            if role == "assistant":
+                text, transient = self._clean_transient_response(text)
             if not text:
                 continue
             state = "complete" if role == "user" else "unknown"
-            if role == "assistant" and busy:
-                state = "streaming"
-            messages.append(ObservedMessage(source_id, role, text, state))
+            message_records.append(
+                (ObservedMessage(source_id, role, text, state), transient)
+            )
+
+        messages: list[ObservedMessage] = []
+        for index, (message, transient) in enumerate(message_records):
+            next_message = (
+                message_records[index + 1][0]
+                if index + 1 < len(message_records)
+                else None
+            )
+            if (
+                transient
+                and next_message is not None
+                and next_message.role == "assistant"
+                and self._same_response(message.text, next_message.text)
+            ):
+                continue
+            messages.append(message)
+
+        if busy:
+            for index in range(len(messages) - 1, -1, -1):
+                if messages[index].role == "assistant":
+                    messages[index] = replace(messages[index], state="streaming")
+                    break
         return TranscriptObservation(
             task_identity=task_identity,
             messages=tuple(messages),

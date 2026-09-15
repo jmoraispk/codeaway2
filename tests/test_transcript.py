@@ -117,6 +117,42 @@ def test_store_replaces_non_prefix_text_and_completes_message():
     assert result.events[0].text == "final"
 
 
+def test_store_publishes_when_a_streaming_message_becomes_unknown():
+    store = TranscriptStore(max_revisions=8)
+    store.observe(observation("Finished text", state="streaming"))
+    cursor = store.poll(None, None)
+
+    store.observe(observation("Finished text", state="unknown"))
+    result = store.poll(cursor.stream_id, cursor.revision)
+
+    assert result.mode == "delta"
+    assert [(event.kind, event.state) for event in result.events] == [
+        ("message_completed", "unknown")
+    ]
+
+
+def test_store_demotes_a_virtualized_streaming_message_when_a_new_one_appears():
+    store = TranscriptStore(max_revisions=8)
+    store.observe(observation("Older response", state="streaming"))
+    cursor = store.poll(None, None)
+
+    store.observe(
+        TranscriptObservation(
+            "task-1",
+            (ObservedMessage("native-2", "assistant", "New response", "streaming"),),
+            "2026-09-14T23:00:01+00:00",
+        )
+    )
+    result = store.poll(cursor.stream_id, cursor.revision)
+
+    snapshot = store.poll(None, None)
+    assert [message.state for message in snapshot.messages] == ["unknown", "streaming"]
+    assert [(event.kind, event.state) for event in result.events] == [
+        ("message_added", None),
+        ("message_completed", "unknown"),
+    ]
+
+
 def test_store_does_not_delete_messages_omitted_by_virtualization():
     store = TranscriptStore(max_revisions=8)
     store.observe(

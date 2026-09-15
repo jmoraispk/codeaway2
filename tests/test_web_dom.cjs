@@ -232,6 +232,7 @@ function phoneDocument() {
     "composer-send",
     "conversation-image",
     "conversation-message",
+    "conversation-status",
     "navigator-projects",
     "navigator-toggle",
     "screen-controls",
@@ -522,6 +523,104 @@ test("phone renders selectable transcript text and polls deltas every second", a
   ]);
 });
 
+test("conversation header follows the selected agent processing state", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  let navigatorCount = 0;
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") {
+      navigatorCount += 1;
+      return response({
+        available: true,
+        projects: [{
+          name: "Alpha", expanded: true, host: "local", state: "connected",
+          tasks: [{
+            task_id: "1", title: "Current", display_title: "Current",
+            state: navigatorCount === 1 ? "busy" : "unknown",
+            worktree: false, selected: true,
+          }],
+        }],
+      });
+    }
+    if (path.startsWith("/api/transcript")) return response(null, 204);
+    throw new Error(`unexpected request ${path}`);
+  };
+
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+
+  const status = documentRef.elements["conversation-status"];
+  assert.equal(status.textContent, "Working…");
+  assert.equal(status.classList.contains("conversation-status--working"), true);
+
+  const workspaceTimer = [...windowRef.intervals].find(
+    ([id]) => windowRef.intervalDelays.get(id) === 2000,
+  )[1];
+  await workspaceTimer();
+
+  assert.equal(status.textContent, "Ready");
+  assert.equal(status.classList.contains("conversation-status--ready"), true);
+});
+
+test("an in-flight navigator response cannot clear locally started work", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  let navigatorCount = 0;
+  let finishNavigator;
+  let finishSend;
+  const readyNavigator = {
+    available: true,
+    projects: [{
+      name: "Alpha", expanded: true, host: "local", state: "connected",
+      tasks: [{
+        task_id: "1", title: "Current", display_title: "Current",
+        state: "unknown", worktree: false, selected: true,
+      }],
+    }],
+  };
+  const fetchFn = async (path) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") {
+      navigatorCount += 1;
+      if (navigatorCount === 1) return response(readyNavigator);
+      return new Promise((resolve) => { finishNavigator = resolve; });
+    }
+    if (path.startsWith("/api/transcript")) return response(null, 204);
+    if (path === "/api/action") {
+      return new Promise((resolve) => { finishSend = resolve; });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+  const phone = initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  await phone.ready;
+  const workspaceTimer = [...windowRef.intervals].find(
+    ([id]) => windowRef.intervalDelays.get(id) === 2000,
+  )[1];
+  const staleRefresh = workspaceTimer();
+  await Promise.resolve();
+  documentRef.elements["composer-input"].value = "Start work";
+  const submission = documentRef.elements.composer.emit("submit");
+  await Promise.resolve();
+
+  finishSend(response({ revision: 1 }));
+  await submission;
+  finishNavigator(response(readyNavigator));
+  await staleRefresh;
+
+  assert.equal(documentRef.elements["conversation-status"].textContent, "Working…");
+
+  const freshRefresh = workspaceTimer();
+  await Promise.resolve();
+  finishNavigator(response(readyNavigator));
+  await freshRefresh;
+  assert.equal(documentRef.elements["conversation-status"].textContent, "Ready");
+});
+
 test("transcript preserves manual scroll and offers a New text jump", async () => {
   const documentRef = phoneDocument();
   const windowRef = new FakeWindow();
@@ -727,6 +826,9 @@ test("project action on the right creates a chat from its initial prompt", async
     host: "private_3",
     text: "Investigate the regression",
   }]);
+  const transcript = documentRef.elements["transcript-messages"].children;
+  assert.equal(transcript.length, 1);
+  assert.equal(transcript[0].children[1].textContent, "Investigate the regression");
 });
 
 test("task action on the right saves a local alias while rendering it separately", async () => {
@@ -1169,4 +1271,37 @@ test("phone pointer and composer listeners dispatch validated actions", async ()
   ]);
   assert.equal(input.value, "");
   assert.equal(documentRef.elements["composer-send"].disabled, false);
+  const rendered = documentRef.elements["transcript-messages"].children;
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0].children[1].textContent, "Continue safely");
+});
+
+test("phone shows its prompt before a slow send finishes", async () => {
+  const documentRef = phoneDocument();
+  const windowRef = new FakeWindow();
+  let finishSend;
+  const fetchFn = async (path, options = {}) => {
+    if (path === "/api/status") return response({
+      ready: true, revision: 0, target: { agent_id: "codex", title: "Agent Window" },
+    });
+    if (path === "/api/navigator") return response({ available: true, projects: [] });
+    if (path.startsWith("/api/transcript")) return response(null, 204);
+    if (path === "/api/action") {
+      assert.equal(JSON.parse(options.body).text, "Visible immediately");
+      return new Promise((resolve) => { finishSend = resolve; });
+    }
+    throw new Error(`unexpected request ${path}`);
+  };
+  initializePhoneWorkspace({ documentRef, windowRef, fetchFn });
+  documentRef.elements["composer-input"].value = "Visible immediately";
+
+  const submission = documentRef.elements.composer.emit("submit");
+  await Promise.resolve();
+
+  const rendered = documentRef.elements["transcript-messages"].children;
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0].children[1].textContent, "Visible immediately");
+
+  finishSend(response({ revision: 1 }));
+  await submission;
 });

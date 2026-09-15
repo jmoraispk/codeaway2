@@ -90,25 +90,99 @@ function createSetupModel(surfaces, status) {
 function createTranscriptController({ requestTranscript, onChange = () => {} }) {
   const state = {
     messages: [],
+    pendingUsers: [],
     stale: false,
     error: null,
     streamId: null,
     revision: 0,
     requestToken: 0,
+    nextLocalId: 1,
   };
 
   function messagesCopy(messages = state.messages) {
     return messages.map((message) => ({ ...message }));
   }
 
+  function publicPendingMessage(message) {
+    return {
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      state: message.state,
+    };
+  }
+
+  function combinedMessages(messages = state.messages, pendingUsers = state.pendingUsers) {
+    const combined = messages.map((message) => ({ ...message }));
+    for (const pending of pendingUsers) {
+      let index = pending.afterId === null
+        ? -1
+        : combined.findIndex((message) => message.id === pending.afterId) + 1;
+      if (index === 0 || index === -1) {
+        index = combined.findIndex(
+          (message) => !pending.knownMessageIds.has(message.id),
+        );
+        if (index === -1) index = combined.length;
+      }
+      combined.splice(index, 0, publicPendingMessage(pending));
+    }
+    return combined;
+  }
+
   function publishedState() {
     return {
-      messages: messagesCopy(),
+      messages: combinedMessages(),
       stale: state.stale,
       error: state.error,
       streamId: state.streamId,
       revision: state.revision,
     };
+  }
+
+  function normalizedPrompt(text) {
+    return text.trim().replace(/\s+/g, " ");
+  }
+
+  function reconcilePendingUsers(messages, pendingUsers) {
+    const remaining = pendingUsers.map((pending) => ({
+      ...pending,
+      knownMessageIds: new Set(pending.knownMessageIds),
+    }));
+    for (const message of messages) {
+      if (message.role !== "user") continue;
+      const index = remaining.findIndex((pending) => (
+        normalizedPrompt(pending.text) === normalizedPrompt(message.text)
+        && !pending.knownMessageIds.has(message.id)
+      ));
+      if (index === -1) continue;
+      const localId = remaining[index].id;
+      for (const pending of remaining) {
+        if (pending.afterId === localId) pending.afterId = message.id;
+      }
+      remaining.splice(index, 1);
+    }
+    return remaining;
+  }
+
+  function scopePendingUsers(pendingUsers, previousStreamId, nextStreamId) {
+    if (previousStreamId === nextStreamId) return pendingUsers;
+    const scoped = [];
+    for (const pending of pendingUsers) {
+      if (pending.streamId === null) {
+        scoped.push({ ...pending, streamId: nextStreamId });
+      } else if (pending.streamId === nextStreamId) {
+        scoped.push(pending);
+      } else if (pending.transferOnNextStream) {
+        scoped.push({
+          ...pending,
+          streamId: nextStreamId,
+          transferOnNextStream: false,
+          knownMessageIds: new Set(),
+          afterId: null,
+        });
+      }
+    }
+    return scoped;
   }
 
   function applyEvents(messages, events) {
@@ -146,11 +220,36 @@ function createTranscriptController({ requestTranscript, onChange = () => {} }) 
   }
 
   const controller = {
-    get messages() { return messagesCopy(); },
+    get messages() { return publishedState().messages; },
     get stale() { return state.stale; },
     get error() { return state.error; },
     get streamId() { return state.streamId; },
     get revision() { return state.revision; },
+    addLocalUser(text, { transferOnNextStream = false } = {}) {
+      const cleaned = text.trim();
+      if (!cleaned) return null;
+      const id = `local-user-${state.nextLocalId++}`;
+      const previous = combinedMessages().at(-1);
+      state.pendingUsers.push({
+        id,
+        role: "user",
+        text: cleaned,
+        state: "complete",
+        knownMessageIds: new Set(state.messages.map((message) => message.id)),
+        afterId: previous?.id || null,
+        streamId: state.streamId,
+        transferOnNextStream,
+      });
+      onChange(publishedState());
+      return id;
+    },
+    removeLocalUser(id) {
+      const index = state.pendingUsers.findIndex((pending) => pending.id === id);
+      if (index === -1) return false;
+      state.pendingUsers.splice(index, 1);
+      onChange(publishedState());
+      return true;
+    },
     async poll() {
       const cursor = state.streamId === null
         ? {}
@@ -161,6 +260,7 @@ function createTranscriptController({ requestTranscript, onChange = () => {} }) 
       if (!result || result.mode === "unchanged") return false;
 
       let nextMessages = messagesCopy();
+      let nextPendingUsers = [...state.pendingUsers];
       let nextStreamId = state.streamId;
       let nextRevision = state.revision;
       if (result.mode === "snapshot") {
@@ -188,15 +288,24 @@ function createTranscriptController({ requestTranscript, onChange = () => {} }) 
         throw new Error("Invalid transcript response.");
       }
 
+      nextPendingUsers = scopePendingUsers(
+        nextPendingUsers,
+        state.streamId,
+        nextStreamId,
+      );
+      nextPendingUsers = reconcilePendingUsers(nextMessages, nextPendingUsers);
+
       const nextStale = Boolean(result.stale);
       const nextError = result.error || null;
       const changed = nextStreamId !== state.streamId
         || nextRevision !== state.revision
         || nextStale !== state.stale
         || nextError !== state.error
-        || JSON.stringify(nextMessages) !== JSON.stringify(state.messages);
+        || JSON.stringify(nextMessages) !== JSON.stringify(state.messages)
+        || nextPendingUsers.length !== state.pendingUsers.length;
       if (!changed) return false;
       state.messages = nextMessages;
+      state.pendingUsers = nextPendingUsers;
       state.streamId = nextStreamId;
       state.revision = nextRevision;
       state.stale = nextStale;
@@ -298,6 +407,7 @@ function initializePhoneWorkspace({
     composerSend: documentRef.querySelector("#composer-send"),
     conversationImage: documentRef.querySelector("#conversation-image"),
     conversationMessage: documentRef.querySelector("#conversation-message"),
+    conversationStatus: documentRef.querySelector("#conversation-status"),
     navigatorProjects: documentRef.querySelector("#navigator-projects"),
     navigatorToggle: documentRef.querySelector("#navigator-toggle"),
     screenControls: documentRef.querySelector("#screen-controls"),
@@ -309,6 +419,7 @@ function initializePhoneWorkspace({
     transcriptStale: documentRef.querySelector("#transcript-stale"),
   };
   const state = {
+    actionGeneration: 0,
     actionBusy: false,
     creatingProject: null,
     createDrafts: {},
@@ -317,6 +428,7 @@ function initializePhoneWorkspace({
     navigator: null,
     navigatorCollapsed: false,
     pollTimer: null,
+    processingLocally: false,
     refreshing: null,
     aliasingTask: null,
     aliasDrafts: {},
@@ -416,6 +528,38 @@ function initializePhoneWorkspace({
     showMessage(elements.statusMessage, "Setup is required before controls are available.", true);
   }
 
+  function setConversationStatus(mode) {
+    const labels = {
+      ready: "Ready",
+      unavailable: "Status unavailable",
+      waiting: "Waiting…",
+      working: "Working…",
+    };
+    elements.conversationStatus.textContent = labels[mode];
+    for (const name of Object.keys(labels)) {
+      elements.conversationStatus.classList.toggle(
+        `conversation-status--${name}`,
+        name === mode,
+      );
+    }
+  }
+
+  function updateConversationStatus(snapshot, { canClearLocal = true } = {}) {
+    if (state.processingLocally && (!canClearLocal || state.actionBusy)) {
+      setConversationStatus("working");
+      return;
+    }
+    state.processingLocally = false;
+    if (!snapshot?.available) {
+      setConversationStatus("unavailable");
+      return;
+    }
+    const selected = snapshot.projects
+      .flatMap((project) => project.tasks)
+      .find((task) => task.selected);
+    setConversationStatus(selected?.state === "busy" ? "working" : "ready");
+  }
+
   function renderNavigator(snapshot) {
     elements.navigatorProjects.replaceChildren();
     if (!snapshot.available) {
@@ -499,6 +643,13 @@ function initializePhoneWorkspace({
           if (!text.trim() || state.actionBusy) return;
           submit.disabled = true;
           cancel.disabled = true;
+          state.actionGeneration += 1;
+          state.processingLocally = true;
+          setConversationStatus("working");
+          const localId = transcript.addLocalUser(
+            text,
+            { transferOnNextStream: true },
+          );
           try {
             await performAction({
               kind: "create_chat",
@@ -511,6 +662,9 @@ function initializePhoneWorkspace({
             renderNavigator(state.navigator);
             showMessage(elements.conversationMessage, "Chat created. Waiting for Codex to index it…");
           } catch (error) {
+            transcript.removeLocalUser(localId);
+            state.processingLocally = false;
+            updateConversationStatus(state.navigator);
             showMessage(elements.conversationMessage, error.message, true);
             submit.disabled = false;
             cancel.disabled = false;
@@ -757,6 +911,8 @@ function initializePhoneWorkspace({
 
   async function refreshWorkspace() {
     if (state.refreshing) return state.refreshing;
+    const requestGeneration = state.actionGeneration;
+    const requestStartedDuringAction = state.actionBusy;
     state.refreshing = (async () => {
       const [statusResult, navigatorResult] = await Promise.allSettled([
         request("/api/status"),
@@ -772,9 +928,15 @@ function initializePhoneWorkspace({
         showMessage(elements.statusMessage, statusResult.reason.message, true);
       }
       if (navigatorResult.status === "fulfilled") {
-        state.navigator = navigatorResult.value;
-        if (state.creatingProject === null && state.aliasingTask === null) {
-          renderNavigator(state.navigator);
+        if (requestGeneration === state.actionGeneration) {
+          state.navigator = navigatorResult.value;
+          updateConversationStatus(
+            state.navigator,
+            { canClearLocal: !requestStartedDuringAction },
+          );
+          if (state.creatingProject === null && state.aliasingTask === null) {
+            renderNavigator(state.navigator);
+          }
         }
       } else {
         if (state.creatingProject === null && state.aliasingTask === null) {
@@ -894,6 +1056,10 @@ function initializePhoneWorkspace({
     elements.composerSend.disabled = true;
     elements.composerInput.disabled = true;
     phone.setComposerText(text);
+    state.actionGeneration += 1;
+    state.processingLocally = true;
+    setConversationStatus("working");
+    const localId = transcript.addLocalUser(text);
     state.actionBusy = true;
     try {
       const result = await phone.send();
@@ -901,6 +1067,9 @@ function initializePhoneWorkspace({
       showMessage(elements.composerMessage, "");
       showConversationRefreshStatus();
     } catch (error) {
+      transcript.removeLocalUser(localId);
+      state.processingLocally = false;
+      updateConversationStatus(state.navigator);
       showMessage(elements.composerMessage, error.message, true);
     } finally {
       state.actionBusy = false;

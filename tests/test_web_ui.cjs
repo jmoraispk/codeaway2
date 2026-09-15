@@ -170,6 +170,126 @@ test("an older transcript request cannot replace a newer stream", async () => {
   assert.equal(controller.messages[0].text, "New");
 });
 
+test("a locally sent prompt appears immediately and reconciles with UIA", async () => {
+  const replies = [
+    { mode: "snapshot", stream_id: "s1", revision: 1, messages: [], stale: false },
+    {
+      mode: "delta",
+      stream_id: "s1",
+      revision: 2,
+      events: [{
+        kind: "message_added",
+        message_id: "u1",
+        message: { id: "u1", role: "user", text: "Check this", state: "complete" },
+      }],
+      stale: false,
+    },
+  ];
+  const changes = [];
+  const controller = createTranscriptController({
+    requestTranscript: async () => replies.shift(),
+    onChange: (state) => changes.push(state),
+  });
+
+  await controller.poll();
+  assert.match(controller.addLocalUser("  Check this  "), /^local-user-/);
+  assert.deepEqual(controller.messages.map(({ role, text }) => ({ role, text })), [
+    { role: "user", text: "Check this" },
+  ]);
+
+  await controller.poll();
+
+  assert.equal(controller.messages.length, 1);
+  assert.equal(controller.messages[0].id, "u1");
+  assert.equal(changes.at(-1).messages.length, 1);
+});
+
+test("an unmatched local prompt stays before a fast assistant reply", async () => {
+  const replies = [
+    {
+      mode: "snapshot", stream_id: "s1", revision: 1, stale: false,
+      messages: [{ id: "a0", role: "assistant", text: "Earlier", state: "unknown" }],
+    },
+    {
+      mode: "delta", stream_id: "s1", revision: 2, stale: false,
+      events: [{
+        kind: "message_added", message_id: "a1",
+        message: { id: "a1", role: "assistant", text: "Fast reply", state: "streaming" },
+      }],
+    },
+  ];
+  const controller = createTranscriptController({
+    requestTranscript: async () => replies.shift(),
+  });
+
+  await controller.poll();
+  controller.addLocalUser("Phone prompt");
+  await controller.poll();
+
+  assert.deepEqual(controller.messages.map((message) => message.text), [
+    "Earlier",
+    "Phone prompt",
+    "Fast reply",
+  ]);
+});
+
+test("later local prompts keep their order as earlier prompts reconcile", async () => {
+  const replies = [
+    { mode: "snapshot", stream_id: "s1", revision: 1, messages: [], stale: false },
+    {
+      mode: "delta", stream_id: "s1", revision: 2, stale: false,
+      events: [{
+        kind: "message_added", message_id: "u1",
+        message: { id: "u1", role: "user", text: "First", state: "complete" },
+      }],
+    },
+  ];
+  const controller = createTranscriptController({
+    requestTranscript: async () => replies.shift(),
+  });
+
+  await controller.poll();
+  controller.addLocalUser("First");
+  controller.addLocalUser("Second");
+  await controller.poll();
+
+  assert.deepEqual(controller.messages.map((message) => message.text), [
+    "First",
+    "Second",
+  ]);
+});
+
+test("local prompts are scoped to a stream unless explicitly transferred", async () => {
+  const replies = [
+    { mode: "snapshot", stream_id: "s1", revision: 1, messages: [], stale: false },
+    { mode: "snapshot", stream_id: "s2", revision: 1, messages: [], stale: false },
+    { mode: "snapshot", stream_id: "s3", revision: 1, messages: [], stale: false },
+  ];
+  const controller = createTranscriptController({
+    requestTranscript: async () => replies.shift(),
+  });
+
+  await controller.poll();
+  controller.addLocalUser("Ordinary prompt");
+  await controller.poll();
+  assert.deepEqual(controller.messages, []);
+
+  controller.addLocalUser("New chat prompt", { transferOnNextStream: true });
+  await controller.poll();
+  assert.equal(controller.messages[0].text, "New chat prompt");
+});
+
+test("a failed send can discard its local prompt", async () => {
+  const controller = createTranscriptController({
+    requestTranscript: async () => ({ mode: "pending", stale: false }),
+  });
+
+  const localId = controller.addLocalUser("Do not retain");
+  assert.equal(controller.removeLocalUser(localId), true);
+
+  assert.deepEqual(controller.messages, []);
+});
+
 test("setup diagram names every required capture", () => {
   assert.deepEqual(setupDiagramLabels, ["Sidebar", "Conversation", "Composer"]);
 });

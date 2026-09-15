@@ -143,14 +143,52 @@ class TranscriptStore:
                             state=observed.state,
                         )
                     )
-                if current.state != "complete" and observed.state == "complete":
+                if (
+                    current.state == "streaming"
+                    and observed.state != "streaming"
+                ) or (
+                    current.state != "complete" and observed.state == "complete"
+                ):
                     events.append(
                         TranscriptEvent(
-                            "message_completed", current.id, state="complete"
+                            "message_completed", current.id, state=observed.state
                         )
                     )
                 if updated != current:
                     self._messages[index] = updated
+
+            active_streaming_id = next(
+                (
+                    self._messages[index].id
+                    for index in sorted(matched_indexes, reverse=True)
+                    if self._messages[index].state == "streaming"
+                ),
+                None,
+            )
+            completed_ids = {
+                event.message_id
+                for event in events
+                if event.kind == "message_completed"
+            }
+            for index, current in enumerate(self._messages):
+                if (
+                    current.state != "streaming"
+                    or current.id == active_streaming_id
+                ):
+                    continue
+                self._messages[index] = TranscriptMessage(
+                    current.id,
+                    current.source_id,
+                    current.role,
+                    current.text,
+                    "unknown",
+                )
+                if current.id not in completed_ids:
+                    events.append(
+                        TranscriptEvent(
+                            "message_completed", current.id, state="unknown"
+                        )
+                    )
             self._captured_at = observation.captured_at
             recovered = self._stale
             self._stale = False

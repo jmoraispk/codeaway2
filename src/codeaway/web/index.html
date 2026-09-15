@@ -37,7 +37,14 @@
       </section>
 
       <section id="conversation" class="conversation" aria-labelledby="conversation-title">
-        <h2 id="conversation-title">Conversation</h2>
+        <div class="conversation-header">
+          <h2 id="conversation-title">Conversation</h2>
+          <span
+            id="conversation-status"
+            class="conversation-status conversation-status--waiting"
+            role="status"
+          >Waiting…</span>
+        </div>
         <p id="conversation-message" class="message" role="status"></p>
         <p id="transcript-stale" class="transcript-stale" role="status" hidden></p>
         <div id="transcript" class="transcript" tabindex="0" aria-label="Agent transcript">

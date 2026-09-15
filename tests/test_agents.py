@@ -543,6 +543,201 @@ def test_codex_transcript_normalizes_object_markers_and_adjacent_duplicate_lines
     assert result.messages[-1].text == "Alpha Beta\nCopy\nFinal line"
 
 
+@pytest.mark.parametrize(
+    "transient_text",
+    (
+        "Response: Approved. I will make the change.\nApproved. I will make the change.",
+        "Response: Done.\nDone.",
+        "Response started\nDone.",
+    ),
+)
+def test_codex_transcript_discards_a_duplicate_accessibility_live_response(
+    codex_target, transient_text
+):
+    document = codex_conversation_document()
+    nodes = list(document.nodes)
+    nodes.extend(
+        (
+            _semantic_node(
+                "assistant-group-2",
+                "GroupControl",
+                "",
+                "group flex min-w-0 flex-col",
+                3,
+                stable_id="runtime:assistant-2",
+            ),
+            _semantic_node(
+                "assistant-role-2",
+                "TextControl",
+                "ChatGPT said:",
+                "sr-only select-none",
+                4,
+            ),
+            _semantic_node(
+                "assistant-text-2",
+                "TextControl",
+                "Approved. I will make the change.",
+                "",
+                4,
+            ),
+        )
+    )
+    desktop = SemanticDesktop(
+        SemanticDocument(tuple(nodes)),
+        {
+            "user-group": "You said:\nCan you help?",
+            "assistant-group": f"ChatGPT said:\n{transient_text}",
+            "assistant-group-2": f"ChatGPT said:\n{transient_text.splitlines()[-1]}",
+        },
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert [(message.role, message.text) for message in result.messages] == [
+        ("user", "Can you help?"),
+        ("assistant", transient_text.splitlines()[-1]),
+    ]
+
+
+def test_codex_transcript_excludes_diff_summary_cards(codex_target):
+    rebuilt = []
+    for node in codex_conversation_document().nodes:
+        if node.id == "assistant-group":
+            continue
+        if node.id == "assistant-role":
+            rebuilt.append(replace(node, depth=3, stable_id="runtime:assistant-marker"))
+            continue
+        if node.id == "assistant-role-copy":
+            rebuilt.append(replace(node, depth=4))
+            continue
+        if node.id == "assistant-text":
+            rebuilt.extend(
+                (
+                    _semantic_node(
+                        "assistant-paragraph",
+                        "GroupControl",
+                        "",
+                        "_Paragraph_example",
+                        3,
+                    ),
+                    replace(node, name="Finished the requested change.", depth=4),
+                    _semantic_node(
+                        "diff-card",
+                        "GroupControl",
+                        "",
+                        "rounded-lg border",
+                        3,
+                    ),
+                    _semantic_node(
+                        "diff-title",
+                        "TextControl",
+                        "Edited 2 files",
+                        "",
+                        4,
+                    ),
+                    _semantic_node("diff-added", "TextControl", "+41", "", 4),
+                    _semantic_node("diff-removed", "TextControl", "-6", "", 4),
+                    _semantic_node("diff-undo", "ButtonControl", "Undo", "", 4),
+                    _semantic_node("diff-review", "ButtonControl", "Review", "", 4),
+                )
+            )
+            continue
+        rebuilt.append(node)
+    desktop = SemanticTextUnavailableDesktop(SemanticDocument(tuple(rebuilt)), {})
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert result.messages[-1].text == "Finished the requested change."
+
+
+def test_codex_transcript_excludes_a_diff_card_inside_a_wrapped_message(codex_target):
+    nodes = []
+    for node in codex_conversation_document().nodes:
+        if node.id == "assistant-text":
+            nodes.append(replace(node, name="Finished the requested change."))
+            nodes.extend(
+                (
+                    _semantic_node(
+                        "wrapped-diff-card",
+                        "GroupControl",
+                        "",
+                        "rounded-lg border",
+                        4,
+                    ),
+                    _semantic_node(
+                        "wrapped-diff-title",
+                        "TextControl",
+                        "Edited 2 files",
+                        "",
+                        5,
+                    ),
+                    _semantic_node("wrapped-diff-added", "TextControl", "+41", "", 5),
+                    _semantic_node("wrapped-diff-undo", "ButtonControl", "Undo", "", 5),
+                    _semantic_node("wrapped-diff-review", "ButtonControl", "Review", "", 5),
+                )
+            )
+            continue
+        nodes.append(node)
+    desktop = SemanticDesktop(
+        SemanticDocument(tuple(nodes)),
+        {
+            "user-group": "You said:\nCan you help?",
+            "assistant-group": (
+                "ChatGPT said:\nFinished the requested change.\nEdited 2 files\n+41"
+            ),
+        },
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert result.messages[-1].text == "Finished the requested change."
+
+
+def test_codex_transcript_marks_only_the_latest_assistant_as_streaming(codex_target):
+    document = codex_conversation_document()
+    nodes = list(document.nodes)
+    nodes.extend(
+        (
+            _semantic_node(
+                "assistant-group-2",
+                "GroupControl",
+                "",
+                "group flex min-w-0 flex-col",
+                3,
+                stable_id="runtime:assistant-2",
+            ),
+            _semantic_node(
+                "assistant-role-2",
+                "TextControl",
+                "ChatGPT said:",
+                "sr-only select-none",
+                4,
+            ),
+            _semantic_node(
+                "assistant-text-2",
+                "TextControl",
+                "A newer response",
+                "",
+                4,
+            ),
+        )
+    )
+    desktop = SemanticDesktop(
+        SemanticDocument(tuple(nodes)),
+        {
+            "user-group": "You said:\nCan you help?",
+            "assistant-group": "ChatGPT said:\nAn earlier response",
+            "assistant-group-2": "ChatGPT said:\nA newer response",
+        },
+    )
+
+    result = CodexAgent().read_transcript(desktop, codex_target)
+
+    assert [
+        message.state for message in result.messages if message.role == "assistant"
+    ] == ["unknown", "streaming"]
+
+
 def test_codex_transcript_ignores_a_role_without_a_unique_message_group(codex_target):
     document = codex_conversation_document()
     nodes = tuple(
